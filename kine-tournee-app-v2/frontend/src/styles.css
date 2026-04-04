@@ -1,25 +1,276 @@
+/* ─────────────────────────────────────────────────────────────────────────────
+   Variables & reset
+───────────────────────────────────────────────────────────────────────────── */
 :root {
-  font-family: Inter, system-ui, sans-serif;
-  color: #162220;
-  background: #f5f7f6;
+  --green:       #184f3b;
+  --green-light: #e8f5f0;
+  --green-mid:   #2d7a5f;
+  --bg:          #f5f7f6;
+  --surface:     #ffffff;
+  --border:      #dce5e1;
+  --text:        #162220;
+  --muted:       #5b6a65;
+  --red:         #dc2626;
+  --red-light:   #fee2e2;
+  --orange:      #d97706;
+  --orange-light:#fef3c7;
+  --indigo:      #4f46e5;
+  --indigo-light:#eef2ff;
+  --radius:      12px;
+  --radius-sm:   8px;
+  --shadow:      0 4px 16px rgba(0,0,0,.06);
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  color: var(--text);
+  background: var(--bg);
+  font-size: 15px;
 }
 * { box-sizing: border-box; }
 body { margin: 0; }
 button, input, textarea, select { font: inherit; }
-.container { max-width: 1100px; margin: 0 auto; padding: 24px; }
-.card { background: #fff; border: 1px solid #dce5e1; border-radius: 16px; padding: 16px; box-shadow: 0 6px 20px rgba(0,0,0,.04); }
-.grid { display: grid; gap: 16px; }
-.grid-2 { grid-template-columns: repeat(2, minmax(0,1fr)); }
-.row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-.tabs { display: flex; gap: 8px; margin-bottom: 16px; }
-.tab { border: 1px solid #c9d8d2; background: #fff; border-radius: 999px; padding: 10px 14px; cursor: pointer; }
-.tab.active { background: #184f3b; color: #fff; border-color: #184f3b; }
-label { display: grid; gap: 6px; font-size: 14px; }
-input, select, textarea { border: 1px solid #cdd9d5; border-radius: 10px; padding: 10px 12px; background: #fff; }
-button.primary { background: #184f3b; color: #fff; border: none; padding: 10px 14px; border-radius: 10px; cursor: pointer; }
-button.secondary { background: #fff; border: 1px solid #cdd9d5; padding: 10px 14px; border-radius: 10px; cursor: pointer; }
+textarea { resize: vertical; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Layout
+───────────────────────────────────────────────────────────────────────────── */
+.container  { max-width: 1200px; margin: 0 auto; padding: 20px 16px; }
+.grid       { display: grid; gap: 14px; }
+.grid-2     { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid-3     { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.row        { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Header
+───────────────────────────────────────────────────────────────────────────── */
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Navigation
+───────────────────────────────────────────────────────────────────────────── */
+.tabs      { display: flex; gap: 8px; }
+.tab       { border: 1px solid var(--border); background: var(--surface); border-radius: 999px; padding: 8px 16px; cursor: pointer; font-size: 14px; font-weight: 500; transition: all .15s; }
+.tab:hover { background: var(--green-light); border-color: var(--green); }
+.tab.active { background: var(--green); color: #fff; border-color: var(--green); }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Cards
+───────────────────────────────────────────────────────────────────────────── */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+.day-card--disabled { opacity: .6; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Forms
+───────────────────────────────────────────────────────────────────────────── */
+label      { display: grid; gap: 5px; font-size: 13px; font-weight: 500; color: var(--muted); }
+input, select, textarea {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 9px 11px;
+  background: var(--surface);
+  color: var(--text);
+  transition: border-color .15s;
+}
+input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--green);
+  box-shadow: 0 0 0 3px rgba(24,79,59,.08);
+}
+.checkbox-label { display: flex; align-items: center; gap: 7px; font-weight: normal; font-size: 14px; color: var(--text); cursor: pointer; }
+.checkbox-label input[type=checkbox] { width: 16px; height: 16px; cursor: pointer; accent-color: var(--green); }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Buttons
+───────────────────────────────────────────────────────────────────────────── */
+button.primary {
+  background: var(--green); color: #fff; border: none;
+  padding: 10px 16px; border-radius: var(--radius-sm); cursor: pointer;
+  font-weight: 500; transition: opacity .15s;
+}
+button.primary:hover  { opacity: .88; }
+button.primary:disabled { opacity: .5; cursor: default; }
+button.secondary {
+  background: var(--surface); border: 1px solid var(--border);
+  padding: 9px 14px; border-radius: var(--radius-sm); cursor: pointer;
+  font-weight: 500; transition: background .15s;
+}
+button.secondary:hover    { background: var(--bg); }
+button.secondary:disabled { opacity: .5; cursor: default; }
+button.secondary.danger   { border-color: #fca5a5; color: var(--red); }
+button.secondary.danger:hover { background: var(--red-light); }
+.small-btn { padding: 5px 10px !important; font-size: 13px !important; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Table
+───────────────────────────────────────────────────────────────────────────── */
+.table-scroll { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; }
-th, td { text-align: left; padding: 10px; border-bottom: 1px solid #edf1ef; font-size: 14px; vertical-align: top; }
-.small { font-size: 12px; color: #5b6a65; }
-pre { overflow: auto; background: #0f172a; color: #e5eef7; padding: 12px; border-radius: 12px; }
-@media (max-width: 860px) { .grid-2 { grid-template-columns: 1fr; } }
+th    { text-align: left; padding: 8px 10px; border-bottom: 2px solid var(--border); font-size: 13px; color: var(--muted); font-weight: 600; }
+td    { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); font-size: 14px; vertical-align: top; }
+tr:last-child td { border-bottom: none; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Visit rows
+───────────────────────────────────────────────────────────────────────────── */
+.visit-row         { transition: background .1s; cursor: grab; }
+.visit-row:hover   { background: var(--green-light); }
+.visit-row--done   { opacity: .55; }
+.visit-row--done td { text-decoration: line-through; }
+.visit-row--fixed  { border-left: 3px solid var(--indigo); }
+.drag-handle       { color: var(--muted); font-size: 16px; cursor: grab; user-select: none; padding: 8px 4px !important; }
+.visit-check       { width: 16px; height: 16px; cursor: pointer; accent-color: var(--green); }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Badges
+───────────────────────────────────────────────────────────────────────────── */
+.badge     { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 600; }
+.badge-xs  { padding: 1px 6px; font-size: 10px; }
+.badge-green   { background: #dcfce7; color: #15803d; }
+.badge-red     { background: var(--red-light); color: var(--red); }
+.badge-orange  { background: var(--orange-light); color: var(--orange); }
+.badge-fixed   { background: var(--indigo-light); color: var(--indigo); }
+.badge-inactive { background: #f1f5f9; color: #64748b; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Stats
+───────────────────────────────────────────────────────────────────────────── */
+.day-stats     { display: flex; gap: 8px; flex-wrap: wrap; padding: 8px 0; }
+.stat-pill     { display: flex; flex-direction: column; align-items: center; background: var(--green-light); border-radius: var(--radius-sm); padding: 6px 12px; min-width: 70px; }
+.stat-value    { font-weight: 700; font-size: 15px; color: var(--green); }
+.stat-label    { font-size: 11px; color: var(--muted); margin-top: 1px; }
+
+.stat-pill-sm  { display: flex; gap: 6px; align-items: baseline; }
+.stat-pill-sm span:first-child { font-size: 18px; font-weight: 700; color: var(--green); }
+
+.week-stats       { }
+.week-stats-grid  { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 10px; margin-top: 10px; }
+.stat-card        { background: var(--green-light); border-radius: var(--radius-sm); padding: 12px 10px; text-align: center; }
+.stat-card-value  { font-size: 22px; font-weight: 700; color: var(--green); }
+.stat-card-label  { font-size: 12px; color: var(--muted); margin-top: 2px; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Progress bar
+───────────────────────────────────────────────────────────────────────────── */
+.progress-bar  { height: 8px; background: var(--border); border-radius: 999px; overflow: hidden; margin-top: 6px; }
+.progress-fill { height: 100%; background: var(--green); border-radius: 999px; transition: width .4s ease; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Patients page
+───────────────────────────────────────────────────────────────────────────── */
+.patient-list { display: flex; flex-direction: column; gap: 8px; max-height: 70vh; overflow-y: auto; }
+.patient-card { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; transition: border-color .15s; }
+.patient-card:hover { border-color: var(--green); }
+.patient-card--editing  { border-color: var(--green); background: var(--green-light); }
+.patient-card--inactive { opacity: .6; }
+.patient-card-header    { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Disponibilités
+───────────────────────────────────────────────────────────────────────────── */
+.avail-grid    { display: grid; gap: 10px; }
+.avail-day     { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; }
+.avail-day--off { background: #f8faf9; opacity: .7; }
+.avail-day-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.avail-section { margin-top: 8px; }
+.avail-label   { font-weight: 600; margin-bottom: 4px; }
+.avail-label--green { color: #15803d; }
+.avail-label--red   { color: var(--red); }
+.avail-toggle  { display: flex; align-items: center; gap: 6px; font-size: 13px; cursor: pointer; }
+.avail-toggle input { accent-color: var(--green); }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Fenêtres horaires
+───────────────────────────────────────────────────────────────────────────── */
+.time-windows-list { display: flex; flex-wrap: wrap; gap: 6px; min-height: 28px; }
+.time-badge        { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; }
+.badge-remove      { background: none; border: none; cursor: pointer; padding: 0 2px; font-size: 14px; line-height: 1; opacity: .7; }
+.badge-remove:hover { opacity: 1; }
+.time-window-add   { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
+.time-window-add input[type=time] { padding: 6px 8px; font-size: 13px; width: 120px; }
+.time-windows { }
+
+.blocked-windows-editor { }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Absences
+───────────────────────────────────────────────────────────────────────────── */
+.absence-manager { background: var(--orange-light); border: 1px solid #fcd34d; border-radius: var(--radius-sm); padding: 10px; }
+.absence-list    { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 4px; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Alertes
+───────────────────────────────────────────────────────────────────────────── */
+.alert-error   { background: var(--red-light); border: 1px solid #fca5a5; color: var(--red); padding: 10px 14px; border-radius: var(--radius-sm); font-size: 14px; }
+.alert-success { background: #dcfce7; border: 1px solid #86efac; color: #15803d; padding: 10px 14px; border-radius: var(--radius-sm); font-size: 14px; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Helpers
+───────────────────────────────────────────────────────────────────────────── */
+.small { font-size: 12px; }
+.muted { color: var(--muted); }
+pre    { overflow: auto; background: #0f172a; color: #e5eef7; padding: 12px; border-radius: var(--radius); font-size: 12px; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Carte Leaflet — marqueurs custom
+───────────────────────────────────────────────────────────────────────────── */
+.map-marker {
+  width: 30px; height: 30px;
+  border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; font-weight: 700; color: #fff;
+  border: 2px solid #fff;
+  box-shadow: 0 2px 6px rgba(0,0,0,.3);
+}
+.map-marker--start { background: var(--green); }
+.map-marker--end   { background: var(--muted); }
+.map-marker--visit { background: #2563eb; }
+.map-marker--done  { background: #22c55e; }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Responsive
+───────────────────────────────────────────────────────────────────────────── */
+@media (max-width: 860px) {
+  .grid-2 { grid-template-columns: 1fr; }
+  .grid-3 { grid-template-columns: 1fr; }
+  .week-stats-grid { grid-template-columns: repeat(2, 1fr); }
+  .tabs { flex-wrap: wrap; }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Impression (PDF / Print)
+───────────────────────────────────────────────────────────────────────────── */
+.print-only { display: none; }
+
+@media print {
+  * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  body { background: #fff; font-size: 12px; }
+  .no-print { display: none !important; }
+  .print-only { display: block; }
+  .container { padding: 0; max-width: 100%; }
+  .card {
+    border: 1px solid #ccc;
+    box-shadow: none;
+    page-break-inside: avoid;
+    margin-bottom: 12px;
+  }
+  .visit-row--done { opacity: 1; }
+  .visit-row--done td { text-decoration: none; }
+  .drag-handle { display: none; }
+  .visit-check { display: none; }
+  .print-header { display: block; margin-bottom: 16px; }
+  .print-header h1 { font-size: 18px; margin: 0 0 4px; }
+  .stat-card { border: 1px solid #ddd; }
+  .day-stats, .week-stats-grid { break-inside: avoid; }
+}
