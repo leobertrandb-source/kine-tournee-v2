@@ -41,8 +41,20 @@ CREATE INDEX IF NOT EXISTS idx_visit_completions_date ON public.visit_completion
 ALTER TABLE public.patient_absences  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.visit_completions ENABLE ROW LEVEL SECURITY;
 
-CREATE POLICY IF NOT EXISTS "anon_all_patient_absences"
-  ON public.patient_absences FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'patient_absences' AND policyname = 'anon_all_patient_absences'
+  ) THEN
+    CREATE POLICY "anon_all_patient_absences"
+      ON public.patient_absences FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+  END IF;
+END $$;
 
-CREATE POLICY IF NOT EXISTS "anon_all_visit_completions"
-  ON public.visit_completions FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+DO $$ BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_policies WHERE tablename = 'visit_completions' AND policyname = 'anon_all_visit_completions'
+  ) THEN
+    CREATE POLICY "anon_all_visit_completions"
+      ON public.visit_completions FOR ALL TO anon, authenticated USING (true) WITH CHECK (true);
+  END IF;
+END $$;
