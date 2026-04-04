@@ -16,6 +16,7 @@ export default function App() {
   const [tab, setTab] = useState('schedule')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [generating, setGenerating] = useState(false)
   const [therapist, setTherapist] = useState(null)
   const [weeklyConfig, setWeeklyConfig] = useState({})
   const [patients, setPatients] = useState([])
@@ -40,6 +41,14 @@ export default function App() {
     loadAll()
   }, [])
 
+  // Charger le dernier planning sauvegardé au démarrage
+  useEffect(() => {
+    if (loading) return
+    api.getSchedule(weekStart).then((s) => {
+      if (s?.days?.length) setSchedule(s)
+    }).catch(() => {})
+  }, [loading, weekStart])
+
   const weekLabel = useMemo(() => {
     const d = new Date(`${weekStart}T00:00:00`)
     return d.toLocaleDateString('fr-FR', { day: '2-digit', month: 'long', year: 'numeric' })
@@ -47,41 +56,81 @@ export default function App() {
 
   async function handleGenerate() {
     setError('')
+    setGenerating(true)
     try {
       const generated = await api.generateSchedule(weekStart)
       setSchedule(generated)
       setTab('schedule')
     } catch (e) {
       setError(e.message)
+    } finally {
+      setGenerating(false)
     }
   }
 
-  if (loading) return <div className="container">Chargement…</div>
+  if (loading) {
+    return (
+      <div className="container" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: '60vh' }}>
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🩺</div>
+          <div>Chargement…</div>
+        </div>
+      </div>
+    )
+  }
+
+  const activePatients = patients.filter((p) => p.active).length
 
   return (
-    <div className="container grid">
-      <div className="row" style={{ justifyContent: 'space-between' }}>
+    <div className="container grid" id="app">
+      {/* En-tête */}
+      <div className="app-header no-print">
         <div>
-          <h1 style={{ marginBottom: 4 }}>Kiné Tournée V2</h1>
-          <div className="small">Base propre avec Supabase + génération par contraintes</div>
+          <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700, color: '#184f3b' }}>
+            🩺 Kiné Tournée
+          </h1>
+          <div className="small muted">Semaine du {weekLabel}</div>
         </div>
-        <div className="small">Semaine du {weekLabel}</div>
+        <div className="row" style={{ gap: 12 }}>
+          <div className="stat-pill-sm">
+            <span>{activePatients}</span>
+            <span className="small muted">patients actifs</span>
+          </div>
+          {schedule?.week_stats && (
+            <div className="stat-pill-sm">
+              <span>{schedule.week_stats.total_visits}</span>
+              <span className="small muted">visites planifiées</span>
+            </div>
+          )}
+        </div>
       </div>
 
-      {error && <div className="card" style={{ color: '#a12a2a' }}>{error}</div>}
+      {error && <div className="alert-error no-print">{error}</div>}
 
-      <div className="tabs">
-        <button className={`tab ${tab === 'schedule' ? 'active' : ''}`} onClick={() => setTab('schedule')}>Planning</button>
-        <button className={`tab ${tab === 'patients' ? 'active' : ''}`} onClick={() => setTab('patients')}>Patients</button>
-        <button className={`tab ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')}>Configuration</button>
+      {/* Navigation */}
+      <div className="tabs no-print">
+        <button className={`tab ${tab === 'schedule' ? 'active' : ''}`} onClick={() => setTab('schedule')}>
+          📋 Planning
+        </button>
+        <button className={`tab ${tab === 'patients' ? 'active' : ''}`} onClick={() => setTab('patients')}>
+          👤 Patients{activePatients > 0 ? ` (${activePatients})` : ''}
+        </button>
+        <button className={`tab ${tab === 'settings' ? 'active' : ''}`} onClick={() => setTab('settings')}>
+          ⚙ Config
+        </button>
       </div>
 
+      {/* Pages */}
       {tab === 'schedule' && (
         <SchedulePage
           schedule={schedule}
+          setSchedule={setSchedule}
           weekStart={weekStart}
           setWeekStart={setWeekStart}
           onGenerate={handleGenerate}
+          therapist={therapist}
+          weeklyConfig={weeklyConfig}
+          generating={generating}
         />
       )}
 
