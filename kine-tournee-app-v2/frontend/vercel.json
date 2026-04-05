@@ -1,5 +1,9 @@
 {
   "rewrites": [
-    { "source": "/(.*)", "destination": "/index.html" }
-  ]
+    { "source": "/api/:path*", "destination": "/api/index" },
+    { "source": "/(.*)",       "destination": "/index.html" }
+  ],
+  "functions": {
+    "api/index.js": { "maxDuration": 30 }
+  }
 }

@@ -58,11 +58,6 @@ function AppInner() {
     }
   }
 
-  // Ping silencieux pour réveiller le backend Render (free tier dort après 15min)
-  useEffect(() => {
-    fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/`).catch(() => {})
-  }, [])
-
   useEffect(() => { loadAll() }, [])
 
   useEffect(() => {
