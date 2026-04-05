@@ -9,18 +9,10 @@ function getColor(name = '') {
   for (let i = 0; i < name.length; i++) h = name.charCodeAt(i) + ((h << 5) - h)
   return PATIENT_COLORS[Math.abs(h) % PATIENT_COLORS.length]
 }
-
 function haversineKm(lat1, lng1, lat2, lng2) {
-  const R = 6371
-  const dLat = (lat2 - lat1) * Math.PI / 180
-  const dLon = (lng2 - lng1) * Math.PI / 180
-  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180) * Math.cos(lat2*Math.PI/180) * Math.sin(dLon/2)**2
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a))
-}
-
-const DAY_LABELS_FR = {
-  monday:'Lundi', tuesday:'Mardi', wednesday:'Mercredi',
-  thursday:'Jeudi', friday:'Vendredi', saturday:'Samedi', sunday:'Dimanche'
+  const R = 6371, dLat = (lat2-lat1)*Math.PI/180, dLon = (lng2-lng1)*Math.PI/180
+  const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLon/2)**2
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a))
 }
 
 export default function NavigationPage({ schedule, weeklyConfig, therapist }) {
@@ -34,13 +26,13 @@ export default function NavigationPage({ schedule, weeklyConfig, therapist }) {
   const accuracyCircle = useRef(null)
 
   const [position, setPosition] = useState(null)
-  const [tracking, setTracking] = useState(false)
   const [accuracy, setAccuracy] = useState(null)
+  const [gpsStatus, setGpsStatus] = useState('idle') // idle | starting | active | denied
   const [selectedDay, setSelectedDay] = useState(null)
   const [completions, setCompletions] = useState({})
-  const [nearbyVisit, setNearbyVisit] = useState(null)
+  const [showList, setShowList] = useState(false)
 
-  // Choisir le jour par défaut = aujourd'hui (si planifié) sinon premier jour actif
+  // Auto-select today or first active day
   useEffect(() => {
     if (!schedule?.days) return
     const today = new Date().toISOString().slice(0, 10)
@@ -49,7 +41,7 @@ export default function NavigationPage({ schedule, weeklyConfig, therapist }) {
     setSelectedDay(todayDay?.day || firstActive?.day || null)
   }, [schedule])
 
-  // Charger completions
+  // Load completions
   useEffect(() => {
     if (!schedule?.week_start) return
     api.getCompletions(schedule.week_start)
@@ -63,179 +55,131 @@ export default function NavigationPage({ schedule, weeklyConfig, therapist }) {
   const currentDay = schedule?.days?.find((d) => d.day === selectedDay)
   const visits = currentDay?.visits || []
   const dayConfig = weeklyConfig?.[selectedDay] || {}
-
   const pendingVisits = visits.filter((v) => !completions[`${v.patient_id}|${currentDay?.date}`]?.done)
   const nextVisit = pendingVisits[0] || null
   const doneCount = visits.length - pendingVisits.length
 
-  // ── Initialiser la carte ─────────────────────────────────────────────────
+  // ── Init map ─────────────────────────────────────────────────────────────
   useEffect(() => {
     const L = window.L
-    if (!L || !mapRef.current) return
-    if (mapInstance.current) return
-
-    const map = L.map(mapRef.current, { zoomControl: true })
+    if (!L || !mapRef.current || mapInstance.current) return
+    const map = L.map(mapRef.current, { zoomControl: false })
     mapInstance.current = map
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap',
-      maxZoom: 19,
+      attribution: '© OpenStreetMap', maxZoom: 19,
     }).addTo(map)
+    L.control.zoom({ position: 'bottomright' }).addTo(map)
     map.setView([46.6, 2.3], 6)
-
     return () => {
       if (watchId.current) navigator.geolocation.clearWatch(watchId.current)
       if (mapInstance.current) { mapInstance.current.remove(); mapInstance.current = null }
     }
   }, [])
 
-  // ── Redessiner la tournée quand le jour change ────────────────────────────
+  // ── Redraw route when day or completions change ───────────────────────────
   useEffect(() => {
-    const L = window.L
-    const map = mapInstance.current
+    const L = window.L; const map = mapInstance.current
     if (!L || !map || !currentDay) return
-
-    // Supprimer anciens marqueurs
-    markersRef.current.forEach((m) => map.removeLayer(m))
-    markersRef.current = []
+    markersRef.current.forEach((m) => map.removeLayer(m)); markersRef.current = []
     if (polylineRef.current) { map.removeLayer(polylineRef.current); polylineRef.current = null }
+    const bounds = [], routePoints = []
 
-    const bounds = []
-    const routePoints = []
-
-    // Départ
     const startLat = dayConfig.start_lat ?? therapist?.default_start_lat
     const startLng = dayConfig.start_lng ?? therapist?.default_start_lng
     if (startLat && startLng) {
-      const icon = L.divIcon({ className: '', html: '<div class="map-marker map-marker--start">D</div>', iconSize: [32,32], iconAnchor: [16,16] })
-      const m = L.marker([startLat, startLng], { icon }).addTo(map).bindPopup('Départ')
-      markersRef.current.push(m)
-      bounds.push([startLat, startLng])
-      routePoints.push([startLat, startLng])
+      const m = L.marker([startLat, startLng], {
+        icon: L.divIcon({ className: '', html: '<div class="map-marker map-marker--start">D</div>', iconSize: [32,32], iconAnchor: [16,16] })
+      }).addTo(map).bindPopup('Départ')
+      markersRef.current.push(m); bounds.push([startLat, startLng]); routePoints.push([startLat, startLng])
     }
 
-    // Visites
     visits.forEach((v, i) => {
       if (!v.lat || !v.lng) return
       const isDone = !!completions[`${v.patient_id}|${currentDay.date}`]?.done
-      const color = getColor(v.patient_name)
-      const icon = L.divIcon({
-        className: '',
-        html: `<div class="map-marker map-marker--visit nav-marker ${isDone ? 'nav-marker--done' : ''}" style="background:${isDone ? '#22c55e' : color}">${i+1}</div>`,
-        iconSize: [36,36], iconAnchor: [18,18]
-      })
-      const m = L.marker([v.lat, v.lng], { icon })
-        .addTo(map)
-        .bindPopup(`<div style="min-width:160px"><strong>${v.patient_name}</strong><br><span style="color:#6b7280">${v.start_time}–${v.end_time}</span><br><small>${v.address}</small>${isDone ? '<br><span style="color:#16a34a;font-weight:600">✓ Effectuée</span>' : ''}</div>`)
-      markersRef.current.push(m)
-      bounds.push([v.lat, v.lng])
-      routePoints.push([v.lat, v.lng])
+      const isNext = !isDone && v === nextVisit
+      const color = isDone ? '#22c55e' : isNext ? '#f59e0b' : getColor(v.patient_name)
+      const m = L.marker([v.lat, v.lng], {
+        icon: L.divIcon({
+          className: '',
+          html: `<div class="map-marker map-marker--visit nav-marker ${isDone ? 'nav-marker--done' : ''} ${isNext ? 'nav-marker--next' : ''}" style="background:${color}">${isDone ? '✓' : i+1}</div>`,
+          iconSize: [36,36], iconAnchor: [18,18],
+        })
+      }).addTo(map)
+        .bindPopup(`<strong>${v.patient_name}</strong><br>${v.start_time}–${v.end_time}<br><small>${v.address}</small>`)
+      markersRef.current.push(m); bounds.push([v.lat, v.lng]); routePoints.push([v.lat, v.lng])
     })
 
-    // Arrivée
     const endLat = dayConfig.end_lat ?? therapist?.default_end_lat
     const endLng = dayConfig.end_lng ?? therapist?.default_end_lng
     if (endLat && endLng) {
-      const icon = L.divIcon({ className: '', html: '<div class="map-marker map-marker--end">A</div>', iconSize: [32,32], iconAnchor: [16,16] })
-      const m = L.marker([endLat, endLng], { icon }).addTo(map).bindPopup('Arrivée')
-      markersRef.current.push(m)
-      bounds.push([endLat, endLng])
-      routePoints.push([endLat, endLng])
+      const m = L.marker([endLat, endLng], {
+        icon: L.divIcon({ className: '', html: '<div class="map-marker map-marker--end">A</div>', iconSize: [32,32], iconAnchor: [16,16] })
+      }).addTo(map).bindPopup('Arrivée')
+      markersRef.current.push(m); bounds.push([endLat, endLng]); routePoints.push([endLat, endLng])
     }
 
-    if (routePoints.length > 1) {
-      polylineRef.current = L.polyline(routePoints, { color: '#184f3b', weight: 3, opacity: .7, dashArray: '8,5' }).addTo(map)
-    }
-
-    if (bounds.length > 0) {
+    if (routePoints.length > 1)
+      polylineRef.current = L.polyline(routePoints, { color:'#184f3b', weight:3, opacity:.7, dashArray:'8,5' }).addTo(map)
+    if (bounds.length > 0)
       map.fitBounds(L.latLngBounds(bounds), { padding: [40, 40] })
-    }
   }, [selectedDay, completions, visits.length])
 
-  // ── Tracking GPS ──────────────────────────────────────────────────────────
+  // ── GPS auto-start ────────────────────────────────────────────────────────
   const startTracking = useCallback(() => {
-    if (!navigator.geolocation) { toast.error('Géolocalisation non supportée'); return }
-    const L = window.L
-    const map = mapInstance.current
+    if (!navigator.geolocation) { setGpsStatus('denied'); return }
+    const L = window.L; const map = mapInstance.current
     if (!L || !map) return
-
-    setTracking(true)
-    toast.info('Localisation activée')
-
+    setGpsStatus('starting')
     watchId.current = navigator.geolocation.watchPosition(
       (pos) => {
         const { latitude: lat, longitude: lng, accuracy: acc } = pos.coords
-        setPosition({ lat, lng })
-        setAccuracy(Math.round(acc))
-
-        // Marqueur position utilisateur
-        const html = `<div class="user-marker"><div class="user-marker-dot"></div><div class="user-marker-ring"></div></div>`
-        const icon = L.divIcon({ className: '', html, iconSize: [40,40], iconAnchor: [20,20] })
-
-        if (userMarker.current) {
-          userMarker.current.setLatLng([lat, lng])
-          userMarker.current.setIcon(icon)
-        } else {
-          userMarker.current = L.marker([lat, lng], { icon, zIndexOffset: 1000 }).addTo(map)
-          userMarker.current.bindPopup('Ma position')
-        }
-
-        // Cercle de précision
-        if (accuracyCircle.current) { map.removeLayer(accuracyCircle.current) }
-        accuracyCircle.current = L.circle([lat, lng], {
-          radius: acc, color: '#2563eb', fillColor: '#93c5fd',
-          fillOpacity: .15, weight: 1
-        }).addTo(map)
-
-        // Centrer sur la position
-        map.panTo([lat, lng], { animate: true })
-
-        // Détecter si proche d'une visite (< 150m)
-        const nearby = visits.find((v) => {
-          if (!v.lat || !v.lng) return false
-          const dist = haversineKm(lat, lng, v.lat, v.lng) * 1000
-          return dist < 150
-        })
-        setNearbyVisit(nearby || null)
+        setPosition({ lat, lng }); setAccuracy(Math.round(acc)); setGpsStatus('active')
+        const icon = L.divIcon({ className: '', iconSize: [40,40], iconAnchor: [20,20],
+          html: `<div class="user-marker"><div class="user-marker-dot"></div><div class="user-marker-ring"></div></div>` })
+        if (userMarker.current) { userMarker.current.setLatLng([lat, lng]); userMarker.current.setIcon(icon) }
+        else userMarker.current = L.marker([lat, lng], { icon, zIndexOffset: 1000 }).addTo(map)
+        if (accuracyCircle.current) map.removeLayer(accuracyCircle.current)
+        accuracyCircle.current = L.circle([lat, lng], { radius: acc, color:'#2563eb', fillColor:'#93c5fd', fillOpacity:.15, weight:1 }).addTo(map)
       },
       (err) => {
-        toast.error(`GPS : ${err.message}`)
-        setTracking(false)
+        setGpsStatus(err.code === 1 ? 'denied' : 'idle')
+        if (err.code !== 1) toast.warning('GPS indisponible')
       },
-      { enableHighAccuracy: true, maximumAge: 3000, timeout: 10000 }
+      { enableHighAccuracy: true, maximumAge: 3000, timeout: 15000 }
     )
-  }, [visits, toast])
+  }, [toast])
 
-  const stopTracking = useCallback(() => {
-    if (watchId.current) { navigator.geolocation.clearWatch(watchId.current); watchId.current = null }
-    if (userMarker.current && mapInstance.current) { mapInstance.current.removeLayer(userMarker.current); userMarker.current = null }
-    if (accuracyCircle.current && mapInstance.current) { mapInstance.current.removeLayer(accuracyCircle.current); accuracyCircle.current = null }
-    setTracking(false)
-    setPosition(null)
-    setNearbyVisit(null)
+  // Auto-start GPS on mount
+  useEffect(() => {
+    startTracking()
+    return () => { if (watchId.current) navigator.geolocation.clearWatch(watchId.current) }
   }, [])
+
+  function centerOnUser() {
+    if (position && mapInstance.current) mapInstance.current.setView([position.lat, position.lng], 17, { animate: true })
+  }
+  function centerOnNext() {
+    if (nextVisit?.lat && nextVisit?.lng && mapInstance.current)
+      mapInstance.current.setView([nextVisit.lat, nextVisit.lng], 16, { animate: true })
+  }
 
   async function markDone(visit) {
     try {
       const updated = await api.upsertCompletion({ patient_id: visit.patient_id, visit_date: currentDay.date, done: true })
       setCompletions((prev) => ({ ...prev, [`${visit.patient_id}|${currentDay.date}`]: updated }))
-      toast.success(`${visit.patient_name} — séance marquée ✓`)
-    } catch { toast.error('Erreur') }
+      toast.success(`${visit.patient_name} — séance effectuée ✓`)
+    } catch { toast.error('Erreur réseau') }
   }
-
   async function markUndone(visit) {
     try {
       const updated = await api.upsertCompletion({ patient_id: visit.patient_id, visit_date: currentDay.date, done: false })
       setCompletions((prev) => ({ ...prev, [`${visit.patient_id}|${currentDay.date}`]: updated }))
-    } catch { toast.error('Erreur') }
-  }
-
-  function centerOnUser() {
-    if (position && mapInstance.current) {
-      mapInstance.current.setView([position.lat, position.lng], 16, { animate: true })
-    }
+    } catch { toast.error('Erreur réseau') }
   }
 
   const activeDays = schedule?.days?.filter((d) => d.visits.length > 0) || []
+  const distToNext = position && nextVisit?.lat ? haversineKm(position.lat, position.lng, nextVisit.lat, nextVisit.lng) : null
+  const isArrived = distToNext !== null && distToNext < 0.15
 
   if (!schedule) {
     return (
@@ -249,151 +193,131 @@ export default function NavigationPage({ schedule, weeklyConfig, therapist }) {
 
   return (
     <div className="nav-page">
-      {/* ── Carte ─────────────────────────────────────────────────────────── */}
+
+      {/* ── 1. Sélecteur de jour ────────────────────────────────────────────── */}
+      <div className="nav-day-tabs">
+        {activeDays.map((d) => (
+          <button key={d.day}
+            className={`nav-day-tab ${selectedDay === d.day ? 'nav-day-tab--active' : ''}`}
+            onClick={() => setSelectedDay(d.day)}>
+            {new Date(d.date + 'T00:00:00').toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric' })}
+            <span className="nav-day-count">{d.visits.length}</span>
+          </button>
+        ))}
+      </div>
+
+      {/* ── 2. Carte "prochain patient" (toujours visible) ──────────────────── */}
+      {currentDay && (
+        <div className={`nav-hero-card ${isArrived ? 'nav-hero-card--arrived' : ''}`}>
+
+          {/* GPS status pill */}
+          <div className="nav-hero-top">
+            <div className="nav-gps-pill">
+              <span className={`nav-gps-dot ${gpsStatus === 'active' ? 'nav-gps-dot--active' : gpsStatus === 'starting' ? 'nav-gps-dot--starting' : 'nav-gps-dot--off'}`} />
+              {gpsStatus === 'active' && accuracy ? `GPS ±${accuracy}m` : gpsStatus === 'starting' ? 'Localisation…' : gpsStatus === 'denied' ? 'GPS refusé' : 'GPS inactif'}
+            </div>
+            <span className="small muted">{doneCount}/{visits.length} effectuées</span>
+          </div>
+
+          {nextVisit ? (
+            <>
+              {isArrived && (
+                <div className="nav-arrived-banner">📍 Vous êtes arrivé !</div>
+              )}
+              <div className="nav-hero-name">
+                <div className="nav-hero-num" style={{ background: getColor(nextVisit.patient_name) }}>
+                  {visits.indexOf(nextVisit) + 1}
+                </div>
+                <div>
+                  <div style={{ fontWeight: 800, fontSize: 18 }}>{nextVisit.patient_name}</div>
+                  <div className="small muted">{nextVisit.start_time} – {nextVisit.end_time} · {nextVisit.session_duration_min} min</div>
+                  <div className="small muted">{nextVisit.address}</div>
+                  {distToNext !== null && (
+                    <div style={{ fontWeight: 700, color: isArrived ? '#16a34a' : 'var(--green)', fontSize: 13, marginTop: 2 }}>
+                      {isArrived ? '✓ Sur place' : `~${distToNext < 1 ? Math.round(distToNext*1000)+'m' : distToNext.toFixed(1)+'km'}`}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="nav-hero-actions">
+                {nextVisit.lat && nextVisit.lng && (
+                  <>
+                    <button className="nav-btn-maps" onClick={() => navigateTo(nextVisit.lat, nextVisit.lng)}>
+                      🗺 Google Maps
+                    </button>
+                    <button className="nav-btn-waze" onClick={() => navigateWaze(nextVisit.lat, nextVisit.lng)}>
+                      🚗 Waze
+                    </button>
+                  </>
+                )}
+                <button className="nav-btn-done" onClick={() => markDone(nextVisit)}>
+                  ✓ Séance faite
+                </button>
+              </div>
+            </>
+          ) : (
+            <div className="nav-done-banner">🎉 Tournée terminée ! Bravo.</div>
+          )}
+        </div>
+      )}
+
+      {/* ── 3. Carte Leaflet ────────────────────────────────────────────────── */}
       <div className="nav-map-container">
         <div ref={mapRef} className="nav-map" />
-
-        {/* Boutons carte */}
         <div className="nav-map-controls">
-          <button
-            className={`nav-control-btn ${tracking ? 'nav-control-btn--active' : ''}`}
-            onClick={tracking ? stopTracking : startTracking}
-            title={tracking ? 'Arrêter le GPS' : 'Activer le GPS'}
-          >
-            {tracking ? '📍' : '🔍'}
-          </button>
-          {position && (
-            <button className="nav-control-btn" onClick={centerOnUser} title="Centrer sur moi">
-              🎯
-            </button>
-          )}
-          {currentDay && visits.some((v) => v.lat && v.lng) && (
-            <button
-              className="nav-control-btn"
-              onClick={() => launchFullRoute(
-                visits,
+          {position && <button className="nav-control-btn" onClick={centerOnUser} title="Ma position">🎯</button>}
+          {nextVisit?.lat && <button className="nav-control-btn" onClick={centerOnNext} title="Centrer sur le prochain">▶</button>}
+          {visits.some((v) => v.lat && v.lng) && (
+            <button className="nav-control-btn" title="Tournée complète dans Maps"
+              onClick={() => launchFullRoute(visits,
                 dayConfig.start_lat ?? therapist?.default_start_lat,
                 dayConfig.start_lng ?? therapist?.default_start_lng,
                 dayConfig.end_lat ?? therapist?.default_end_lat,
-                dayConfig.end_lng ?? therapist?.default_end_lng
-              )}
-              title="Lancer dans Google Maps"
-            >
+                dayConfig.end_lng ?? therapist?.default_end_lng)}>
               🚀
             </button>
           )}
         </div>
-
-        {/* Badge GPS */}
-        {tracking && (
-          <div className="nav-gps-badge">
-            <span className="nav-gps-dot" />
-            GPS actif{accuracy ? ` · ±${accuracy}m` : ''}
-          </div>
-        )}
-
-        {/* Alerte proximité */}
-        {nearbyVisit && !completions[`${nearbyVisit.patient_id}|${currentDay?.date}`]?.done && (
-          <div className="nav-nearby-alert">
-            <div>
-              <div style={{ fontWeight: 700 }}>Vous êtes arrivé !</div>
-              <div className="small">{nearbyVisit.patient_name}</div>
-            </div>
-            <button className="primary small-btn" onClick={() => markDone(nearbyVisit)}>✓ Marquer</button>
+        {gpsStatus === 'denied' && (
+          <div className="nav-gps-denied">
+            GPS refusé — autorisez la localisation dans les réglages du navigateur
           </div>
         )}
       </div>
 
-      {/* ── Panneau bas ───────────────────────────────────────────────────── */}
-      <div className="nav-panel">
-        {/* Sélecteur de jour */}
-        <div className="nav-day-tabs">
-          {activeDays.map((d) => (
-            <button
-              key={d.day}
-              className={`nav-day-tab ${selectedDay === d.day ? 'nav-day-tab--active' : ''}`}
-              onClick={() => setSelectedDay(d.day)}
-            >
-              {new Date(d.date + 'T00:00:00').toLocaleDateString('fr-FR', { weekday: 'short', day: 'numeric' })}
-              <span className="nav-day-count">{d.visits.length}</span>
-            </button>
-          ))}
-        </div>
-
-        {currentDay && (
-          <>
-            {/* Progression */}
-            <div className="nav-progress-row">
-              <span className="small"><strong>{doneCount}/{visits.length}</strong> séances effectuées</span>
-              <div className="progress-bar" style={{ flex: 1, maxWidth: 200 }}>
-                <div className="progress-fill" style={{ width: `${visits.length ? (doneCount/visits.length)*100 : 0}%` }} />
-              </div>
-            </div>
-
-            {/* Prochain patient */}
-            {nextVisit && (
-              <div className="nav-next-card">
-                <div className="nav-next-label">Prochain patient</div>
-                <div className="nav-next-content">
-                  <div className="nav-next-info">
-                    <div className="nav-next-name">{nextVisit.patient_name}</div>
-                    <div className="small muted">{nextVisit.address}</div>
-                    <div className="small muted">{nextVisit.start_time} → {nextVisit.end_time} · {nextVisit.session_duration_min} min</div>
-                    {position && nextVisit.lat && nextVisit.lng && (
-                      <div className="small" style={{ color: 'var(--green)', fontWeight: 600, marginTop: 2 }}>
-                        ~{(haversineKm(position.lat, position.lng, nextVisit.lat, nextVisit.lng)).toFixed(1)} km de votre position
-                      </div>
-                    )}
-                  </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {nextVisit.lat && nextVisit.lng && (
-                      <>
-                        <button className="btn-gps" onClick={() => navigateTo(nextVisit.lat, nextVisit.lng)}>🗺 Maps</button>
-                        <button className="btn-gps" onClick={() => navigateWaze(nextVisit.lat, nextVisit.lng)}>🚗 Waze</button>
-                      </>
-                    )}
-                    <button className="primary small-btn" onClick={() => markDone(nextVisit)}>✓ Fait</button>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {!nextVisit && doneCount === visits.length && (
-              <div className="nav-done-banner">
-                🎉 Tournée terminée ! Bravo.
-              </div>
-            )}
-
-            {/* Liste de toutes les visites */}
+      {/* ── 4. Liste dépliable ──────────────────────────────────────────────── */}
+      {currentDay && visits.length > 0 && (
+        <div className="nav-list-section">
+          <button className="nav-list-toggle" onClick={() => setShowList((v) => !v)}>
+            {showList ? '▼' : '▲'} Toutes les visites ({visits.length})
+          </button>
+          {showList && (
             <div className="nav-visits-list">
               {visits.map((v, i) => {
                 const isDone = !!completions[`${v.patient_id}|${currentDay.date}`]?.done
-                const color = getColor(v.patient_name)
                 return (
                   <div key={`${v.patient_id}-${v.start_time}`} className={`nav-visit-item ${isDone ? 'nav-visit-item--done' : ''}`}>
-                    <div className="nav-visit-num" style={{ background: isDone ? '#22c55e' : color }}>
+                    <div className="nav-visit-num" style={{ background: isDone ? '#22c55e' : getColor(v.patient_name) }}>
                       {isDone ? '✓' : i+1}
                     </div>
                     <div className="nav-visit-info">
                       <div style={{ fontWeight: 600, fontSize: 14 }}>{v.patient_name}</div>
-                      <div className="small muted">{v.start_time} · {v.session_duration_min} min · {v.estimated_km ?? '?'} km</div>
+                      <div className="small muted">{v.start_time} · {v.session_duration_min} min</div>
                     </div>
-                    <div style={{ display: 'flex', gap: 4 }}>
-                      {v.lat && v.lng && (
-                        <button className="btn-gps" style={{ padding: '4px 7px' }} onClick={() => navigateTo(v.lat, v.lng)}>🗺</button>
-                      )}
+                    <div style={{ display:'flex', gap:4 }}>
+                      {v.lat && v.lng && <button className="btn-gps" onClick={() => navigateTo(v.lat, v.lng)}>🗺</button>}
                       {isDone
                         ? <button className="secondary small-btn" onClick={() => markUndone(v)}>↩</button>
-                        : <button className="primary small-btn" onClick={() => markDone(v)}>✓</button>
-                      }
+                        : <button className="primary small-btn" onClick={() => markDone(v)}>✓</button>}
                     </div>
                   </div>
                 )
               })}
             </div>
-          </>
-        )}
-      </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

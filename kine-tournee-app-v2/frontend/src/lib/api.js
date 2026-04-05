@@ -1,4 +1,6 @@
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4000'
+// En prod, l'API est sur le même domaine Vercel — URL relative
+// En dev local, pointer sur le backend local
+const API_URL = import.meta.env.VITE_API_URL || ''
 
 async function req(method, path, body) {
   const res = await fetch(`${API_URL}${path}`, {
@@ -44,4 +46,5 @@ export const api = {
   generateSchedule: (weekStart) => req('POST', '/api/schedule/generate', { weekStart }),
   getSchedule: (weekStart) => req('GET', `/api/schedule?weekStart=${encodeURIComponent(weekStart)}`),
   saveSchedule: (weekStart, schedule) => req('POST', '/api/schedule/save', { weekStart, schedule }),
+  getScheduleHistory: () => req('GET', '/api/schedules/history'),
 }

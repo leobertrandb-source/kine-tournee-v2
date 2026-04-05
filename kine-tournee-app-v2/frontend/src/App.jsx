@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useContext } from 'react'
 import { api } from './lib/api'
 import PatientsPage from './pages/PatientsPage'
 import SettingsPage from './pages/SettingsPage'
 import SchedulePage from './pages/SchedulePage'
 import DashboardPage from './pages/DashboardPage'
 import NavigationPage from './pages/NavigationPage'
-import { ToastProvider } from './components/Toast'
+import HistoryPage from './pages/HistoryPage'
+import { ToastProvider, useToast } from './components/Toast'
 import { SkeletonCard } from './components/Skeleton'
 
 function getMonday(date = new Date()) {
@@ -20,11 +21,13 @@ const NAV = [
   { id: 'dashboard',   icon: '🏠', label: 'Accueil' },
   { id: 'schedule',    icon: '📋', label: 'Planning' },
   { id: 'navigation',  icon: '🧭', label: 'Navigation GPS' },
+  { id: 'history',     icon: '📅', label: 'Historique' },
   { id: 'patients',    icon: '👤', label: 'Patients' },
   { id: 'settings',    icon: '⚙',  label: 'Config' },
 ]
 
 function AppInner() {
+  const toast = useToast()
   const [tab, setTab] = useState('dashboard')
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
@@ -49,6 +52,7 @@ function AppInner() {
       setPatients(allPatients)
     } catch (e) {
       console.error(e)
+      toast.error('Impossible de joindre le serveur — réessayez dans quelques secondes')
     } finally {
       setLoading(false)
     }
@@ -70,12 +74,18 @@ function AppInner() {
 
   async function handleGenerate() {
     setGenerating(true)
+    toast.info('Génération en cours…')
     try {
       const generated = await api.generateSchedule(weekStart)
       setSchedule(generated)
       setTab('schedule')
+      toast.success('Tournée générée ✓')
     } catch (e) {
       console.error(e)
+      const isNetwork = e.message === 'Failed to fetch'
+      toast.error(isNetwork
+        ? 'Serveur indisponible — il se réveille, réessayez dans 30 secondes'
+        : `Erreur : ${e.message}`)
     } finally {
       setGenerating(false)
     }
@@ -170,6 +180,7 @@ function AppInner() {
               therapist={therapist}
             />
           )}
+          {tab === 'history' && <HistoryPage />}
           {tab === 'patients' && (
             <PatientsPage patients={patients} setPatients={setPatients} />
           )}

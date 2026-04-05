@@ -273,6 +273,23 @@ app.post('/api/schedule/generate', async (req, res) => {
   }
 })
 
+// GET /api/schedules/history — toutes les semaines passées (1 entrée par semaine)
+app.get('/api/schedules/history', async (_req, res) => {
+  const { data, error } = await supabase
+    .from('generated_schedules')
+    .select('id, week_start, created_at, payload')
+    .order('week_start', { ascending: false })
+
+  if (error) return res.status(500).json({ error: error.message })
+
+  // Dédoublonner : garder la dernière version par semaine
+  const byWeek = new Map()
+  for (const row of data) {
+    if (!byWeek.has(row.week_start)) byWeek.set(row.week_start, row)
+  }
+  res.json([...byWeek.values()])
+})
+
 // GET /api/schedule?weekStart=YYYY-MM-DD
 app.get('/api/schedule', async (req, res) => {
   const weekStart = req.query.weekStart
