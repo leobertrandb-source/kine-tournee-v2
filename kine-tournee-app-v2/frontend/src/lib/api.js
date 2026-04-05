@@ -1,6 +1,7 @@
-// En prod, l'API est sur le même domaine Vercel — URL relative
-// En dev local, pointer sur le backend local
-const API_URL = import.meta.env.VITE_API_URL || ''
+// Toujours utiliser des URLs relatives sur Vercel (même domaine).
+// VITE_API_URL reste utilisé uniquement en dev local (localhost).
+const _raw = import.meta.env.VITE_API_URL || ''
+const API_URL = _raw.includes('localhost') ? _raw : ''
 
 async function req(method, path, body) {
   const res = await fetch(`${API_URL}${path}`, {

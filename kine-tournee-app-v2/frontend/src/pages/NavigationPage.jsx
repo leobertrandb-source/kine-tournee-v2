@@ -15,7 +15,7 @@ function haversineKm(lat1, lng1, lat2, lng2) {
   return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a))
 }
 
-export default function NavigationPage({ schedule, weeklyConfig, therapist }) {
+export default function NavigationPage({ schedule, weeklyConfig, therapist, onGoToPlanning }) {
   const toast = useToast()
   const mapRef = useRef(null)
   const mapInstance = useRef(null)
@@ -186,13 +186,36 @@ export default function NavigationPage({ schedule, weeklyConfig, therapist }) {
       <div className="nav-page-empty">
         <div style={{ fontSize: 64, marginBottom: 16 }}>🧭</div>
         <div style={{ fontSize: 20, fontWeight: 700, marginBottom: 8 }}>Aucune tournée générée</div>
-        <div className="small muted">Générez d'abord une tournée depuis l'onglet Planning.</div>
+        <div className="small muted" style={{ marginBottom: 16 }}>Générez d'abord une tournée depuis l'onglet Planning.</div>
+        {onGoToPlanning && <button className="primary" onClick={onGoToPlanning}>⚡ Aller au Planning</button>}
       </div>
     )
   }
 
+  // Visites sans coordonnées GPS
+  const allVisits = schedule.days?.flatMap((d) => d.visits) || []
+  const missingGps = allVisits.filter((v) => !v.lat || !v.lng)
+  const missingGpsBanner = missingGps.length > 0
+
   return (
     <div className="nav-page">
+
+      {/* ── Bannière GPS manquant ───────────────────────────────────────────── */}
+      {missingGpsBanner && (
+        <div className="nav-stale-banner">
+          <div>
+            <strong>📍 {missingGps.length} patient(s) sans coordonnées GPS</strong>
+            <div className="small" style={{ marginTop: 2 }}>
+              Allez dans Patients → "📍 Tout géolocaliser", puis régénérez la tournée.
+            </div>
+          </div>
+          {onGoToPlanning && (
+            <button className="secondary small-btn" style={{ flexShrink: 0 }} onClick={onGoToPlanning}>
+              ⚡ Régénérer
+            </button>
+          )}
+        </div>
+      )}
 
       {/* ── 1. Sélecteur de jour ────────────────────────────────────────────── */}
       <div className="nav-day-tabs">

@@ -509,6 +509,13 @@ pre { overflow: auto; background: #0f172a; color: #e5eef7; padding: 12px; border
 }
 .nav-btn-maps:hover, .nav-btn-waze:hover, .nav-btn-done:hover { opacity: .88; }
 
+.nav-stale-banner {
+  background: #fef3c7; border-bottom: 1px solid #fcd34d; color: #92400e;
+  padding: 10px 14px; display: flex; align-items: center;
+  justify-content: space-between; gap: 12px; flex-shrink: 0;
+}
+[data-theme="dark"] .nav-stale-banner { background: #3b1f00; border-color: #78350f; color: #fde68a; }
+
 .nav-gps-denied {
   position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
   background: var(--red); color: #fff; padding: 8px 14px;

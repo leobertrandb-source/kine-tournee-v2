@@ -178,6 +178,7 @@ function AppInner() {
               schedule={schedule}
               weeklyConfig={weeklyConfig}
               therapist={therapist}
+              onGoToPlanning={() => setTab('schedule')}
             />
           )}
           {tab === 'history' && <HistoryPage />}
