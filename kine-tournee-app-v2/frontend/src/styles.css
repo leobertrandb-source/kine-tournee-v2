@@ -47,6 +47,49 @@ button, input, textarea, select { font: inherit; }
 textarea { resize: vertical; }
 a { color: var(--green); }
 
+/* ── Login ────────────────────────────────────────────────────────────────── */
+.login-page {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center;
+  background: var(--bg); padding: 24px;
+}
+.login-card {
+  background: var(--surface); border-radius: var(--radius);
+  box-shadow: var(--shadow-md); padding: 40px 32px;
+  width: 100%; max-width: 400px;
+}
+.login-logo { text-align: center; margin-bottom: 32px; }
+.login-logo-icon { font-size: 52px; margin-bottom: 8px; }
+.login-logo-title { font-size: 22px; font-weight: 800; color: var(--green); }
+.login-logo-sub { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.login-form { display: flex; flex-direction: column; gap: 16px; }
+.login-label { display: flex; flex-direction: column; gap: 6px; font-size: 14px; font-weight: 600; color: var(--text2); }
+.login-input {
+  width: 100%; padding: 11px 14px; border-radius: var(--radius-sm);
+  border: 1.5px solid var(--border); background: var(--surface2);
+  font-size: 15px; color: var(--text); transition: border-color .15s;
+}
+.login-input:focus { outline: none; border-color: var(--green); }
+.login-pw-wrap { position: relative; }
+.login-pw-wrap .login-input { padding-right: 42px; }
+.login-pw-toggle {
+  position: absolute; right: 10px; top: 50%; transform: translateY(-50%);
+  background: none; border: none; cursor: pointer; font-size: 16px; padding: 4px;
+}
+.login-btn {
+  width: 100%; padding: 13px; border-radius: var(--radius-sm);
+  border: none; background: var(--green); color: #fff;
+  font-size: 16px; font-weight: 700; cursor: pointer;
+  transition: opacity .15s; margin-top: 4px;
+}
+.login-btn:hover:not(:disabled) { opacity: .88; }
+.login-btn:disabled { opacity: .6; }
+.login-error {
+  background: var(--red-light); color: var(--red);
+  padding: 10px 14px; border-radius: var(--radius-sm);
+  font-size: 13px; font-weight: 600; border-left: 3px solid var(--red);
+}
+.login-footer { text-align: center; font-size: 12px; color: var(--muted); margin-top: 24px; }
+
 /* ── Layout global ────────────────────────────────────────────────────────── */
 .app-layout {
   display: flex;
@@ -411,10 +454,29 @@ pre { overflow: auto; background: #0f172a; color: #e5eef7; padding: 12px; border
   .kpi-grid { grid-template-columns: repeat(2,1fr); }
   .main-content { padding: 16px; }
   .toast-container { bottom: 16px; right: 16px; left: 16px; max-width: none; }
+  /* Toolbar Planning : icônes-only sur mobile pour les boutons secondaires */
+  .toolbar { gap: 8px; }
+  /* Hero card GPS : boutons empilés sur mobile */
+  .nav-hero-actions { flex-direction: column; }
+  .nav-btn-maps, .nav-btn-waze, .nav-btn-done { flex: none; width: 100%; }
+  /* Notif modal */
+  .notif-row-header { flex-direction: column; align-items: flex-start; gap: 8px; }
+  .notif-row-btns { width: 100%; justify-content: flex-start; }
+  /* Avail grid */
+  .avail-grid { grid-template-columns: 1fr; }
+  /* Login */
+  .login-card { padding: 28px 20px; }
 }
 @media (max-width: 480px) {
   .kpi-grid { grid-template-columns: 1fr; }
   .week-summary-grid { grid-template-columns: repeat(3,1fr); }
+  .main-content { padding: 12px; }
+  .card { padding: 14px; }
+  /* Toolbar : masquer labels, garder icônes */
+  .toolbar .secondary.small-btn span { display: none; }
+  /* Inputs full-width dans les formulaires */
+  .time-window-add { flex-direction: column; align-items: stretch; }
+  .time-window-add input { width: 100%; }
 }
 
 /* ── Print ────────────────────────────────────────────────────────────────── */

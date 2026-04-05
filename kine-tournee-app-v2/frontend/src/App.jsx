@@ -1,11 +1,13 @@
-import { useEffect, useMemo, useState, useContext } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { api } from './lib/api'
+import { supabase } from './lib/supabase'
 import PatientsPage from './pages/PatientsPage'
 import SettingsPage from './pages/SettingsPage'
 import SchedulePage from './pages/SchedulePage'
 import DashboardPage from './pages/DashboardPage'
 import NavigationPage from './pages/NavigationPage'
 import HistoryPage from './pages/HistoryPage'
+import LoginPage from './pages/LoginPage'
 import { ToastProvider, useToast } from './components/Toast'
 import { SkeletonCard } from './components/Skeleton'
 
@@ -28,6 +30,7 @@ const NAV = [
 
 function AppInner() {
   const toast = useToast()
+  const [session, setSession] = useState(undefined) // undefined = chargement, null = non connecté
   const [tab, setTab] = useState('dashboard')
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
@@ -39,11 +42,25 @@ function AppInner() {
   const [dark, setDark] = useState(() => localStorage.getItem('theme') === 'dark')
   const [sidebarOpen, setSidebarOpen] = useState(false)
 
+  // ── Auth ────────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null))
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => setSession(s))
+    return () => subscription.unsubscribe()
+  }, [])
+
+  async function handleLogout() {
+    await supabase.auth.signOut()
+    setSession(null)
+  }
+
+  // ── Theme ───────────────────────────────────────────────────────────────────
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light')
     localStorage.setItem('theme', dark ? 'dark' : 'light')
   }, [dark])
 
+  // ── Data loading (seulement si connecté) ────────────────────────────────────
   async function loadAll() {
     try {
       const [boot, allPatients] = await Promise.all([api.bootstrap(), api.getPatients()])
@@ -52,20 +69,24 @@ function AppInner() {
       setPatients(allPatients)
     } catch (e) {
       console.error(e)
-      toast.error('Impossible de joindre le serveur — réessayez dans quelques secondes')
+      toast.error('Impossible de joindre le serveur')
     } finally {
       setLoading(false)
     }
   }
 
-  useEffect(() => { loadAll() }, [])
+  useEffect(() => {
+    if (session) loadAll()
+    else if (session === null) setLoading(false)
+  }, [session])
 
   useEffect(() => {
-    if (loading) return
+    if (loading || !session) return
     api.getSchedule(weekStart).then((s) => {
       if (s?.days?.length) setSchedule(s)
+      else setSchedule(null)
     }).catch(() => {})
-  }, [loading, weekStart])
+  }, [loading, weekStart, session])
 
   const weekLabel = useMemo(() => {
     const d = new Date(`${weekStart}T00:00:00`)
@@ -82,9 +103,8 @@ function AppInner() {
       toast.success('Tournée générée ✓')
     } catch (e) {
       console.error(e)
-      const isNetwork = e.message === 'Failed to fetch'
-      toast.error(isNetwork
-        ? 'Serveur indisponible — il se réveille, réessayez dans 30 secondes'
+      toast.error(e.message === 'Failed to fetch'
+        ? 'Serveur indisponible — réessayez dans 30 secondes'
         : `Erreur : ${e.message}`)
     } finally {
       setGenerating(false)
@@ -93,7 +113,8 @@ function AppInner() {
 
   const activeCount = patients.filter((p) => p.active).length
 
-  if (loading) {
+  // ── Écran de chargement initial (auth + données) ────────────────────────────
+  if (session === undefined || (session && loading)) {
     return (
       <div className="app-loading">
         <div className="app-loading-inner">
@@ -109,18 +130,22 @@ function AppInner() {
     )
   }
 
+  // ── Page de connexion ───────────────────────────────────────────────────────
+  if (!session) {
+    return <LoginPage onLogin={setSession} />
+  }
+
+  // ── Application principale ──────────────────────────────────────────────────
   return (
     <div className="app-layout">
-      {/* Overlay mobile */}
       {sidebarOpen && <div className="sidebar-overlay" onClick={() => setSidebarOpen(false)} />}
 
-      {/* Sidebar */}
       <aside className={`sidebar ${sidebarOpen ? 'sidebar--open' : ''} no-print`}>
         <div className="sidebar-brand">
           <span className="sidebar-logo">🩺</span>
           <div>
             <div className="sidebar-title">Kiné Tournée</div>
-            <div className="sidebar-sub">{therapist?.full_name || therapist?.name || ''}</div>
+            <div className="sidebar-sub">{therapist?.full_name || therapist?.name || session?.user?.email || ''}</div>
           </div>
         </div>
 
@@ -149,12 +174,14 @@ function AppInner() {
             <span className="nav-icon">{dark ? '☀' : '🌙'}</span>
             <span>{dark ? 'Mode clair' : 'Mode sombre'}</span>
           </button>
+          <button className="nav-item" style={{ color: 'var(--red)', marginTop: 2 }} onClick={handleLogout}>
+            <span className="nav-icon">🚪</span>
+            <span>Déconnexion</span>
+          </button>
         </div>
       </aside>
 
-      {/* Contenu principal */}
       <main className="app-main">
-        {/* Header mobile */}
         <div className="mobile-header no-print">
           <button className="mobile-menu-btn" onClick={() => setSidebarOpen(true)}>☰</button>
           <span className="sidebar-title">🩺 Kiné Tournée</span>
