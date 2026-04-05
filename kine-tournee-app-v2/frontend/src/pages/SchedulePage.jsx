@@ -1,282 +1,284 @@
 import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
+import { getCurrentPosition, launchFullRoute, navigateTo, navigateWaze } from '../lib/gps'
+import { useToast } from '../components/Toast'
 
 const DAY_LABELS_FR = {
-  monday: 'Lundi',
-  tuesday: 'Mardi',
-  wednesday: 'Mercredi',
-  thursday: 'Jeudi',
-  friday: 'Vendredi',
-  saturday: 'Samedi',
-  sunday: 'Dimanche',
+  monday: 'Lundi', tuesday: 'Mardi', wednesday: 'Mercredi',
+  thursday: 'Jeudi', friday: 'Vendredi', saturday: 'Samedi', sunday: 'Dimanche',
+}
+
+const PATIENT_COLORS = ['#184f3b','#2563eb','#7c3aed','#db2777','#ea580c','#16a34a','#0891b2','#9333ea']
+function getColor(name = '') {
+  let h = 0
+  for (let i = 0; i < name.length; i++) h = name.charCodeAt(i) + ((h << 5) - h)
+  return PATIENT_COLORS[Math.abs(h) % PATIENT_COLORS.length]
+}
+function Avatar({ name, size = 32 }) {
+  const initials = name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase()
+  return <div className="avatar" style={{ width: size, height: size, background: getColor(name), fontSize: size * 0.38 }}>{initials}</div>
+}
+
+function parseMin(t) {
+  if (!t) return 0
+  const [h, m] = t.split(':').map(Number)
+  return h * 60 + m
 }
 
 // ── Carte Leaflet ─────────────────────────────────────────────────────────────
-function DayMap({ day, startLat, startLng, endLat, endLng }) {
+function DayMap({ day, startLat, startLng, endLat, endLng, userPosition }) {
   const mapRef = useRef(null)
   const mapInstanceRef = useRef(null)
 
   useEffect(() => {
     const L = window.L
     if (!L || !mapRef.current) return
-    if (mapInstanceRef.current) {
-      mapInstanceRef.current.remove()
-      mapInstanceRef.current = null
-    }
+    if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null }
 
-    const map = L.map(mapRef.current, { zoomControl: true })
+    const map = L.map(mapRef.current)
     mapInstanceRef.current = map
-
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      attribution: '© OpenStreetMap',
-    }).addTo(map)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(map)
 
     const points = []
+    const mkIcon = (html) => L.divIcon({ className: '', html, iconSize: [32, 32], iconAnchor: [16, 16] })
 
-    // Point de départ
     if (startLat && startLng) {
-      const icon = L.divIcon({ className: '', html: '<div class="map-marker map-marker--start">D</div>', iconSize: [32, 32], iconAnchor: [16, 16] })
-      L.marker([startLat, startLng], { icon }).addTo(map).bindPopup('Départ')
+      L.marker([startLat, startLng], { icon: mkIcon('<div class="map-marker map-marker--start">D</div>') }).addTo(map).bindPopup('Départ')
       points.push([startLat, startLng])
     }
-
-    // Visites
     day.visits.forEach((v, i) => {
       if (!v.lat || !v.lng) return
-      const icon = L.divIcon({ className: '', html: `<div class="map-marker map-marker--visit ${v.done ? 'map-marker--done' : ''}">${i + 1}</div>`, iconSize: [32, 32], iconAnchor: [16, 16] })
-      L.marker([v.lat, v.lng], { icon })
-        .addTo(map)
-        .bindPopup(`<strong>${v.patient_name}</strong><br>${v.start_time} – ${v.end_time}<br>${v.address}`)
+      const color = getColor(v.patient_name)
+      L.marker([v.lat, v.lng], { icon: mkIcon(`<div class="map-marker map-marker--visit" style="background:${color}">${i+1}</div>`) })
+        .addTo(map).bindPopup(`<strong>${v.patient_name}</strong><br>${v.start_time}–${v.end_time}<br><small>${v.address}</small>`)
       points.push([v.lat, v.lng])
     })
-
-    // Point d'arrivée
     if (endLat && endLng) {
-      const icon = L.divIcon({ className: '', html: '<div class="map-marker map-marker--end">A</div>', iconSize: [32, 32], iconAnchor: [16, 16] })
-      L.marker([endLat, endLng], { icon }).addTo(map).bindPopup('Arrivée')
+      L.marker([endLat, endLng], { icon: mkIcon('<div class="map-marker map-marker--end">A</div>') }).addTo(map).bindPopup('Arrivée')
       points.push([endLat, endLng])
     }
-
-    // Tracé de la route
+    if (userPosition) {
+      L.marker([userPosition.lat, userPosition.lng], { icon: mkIcon('<div class="map-marker map-marker--me">📍</div>') }).addTo(map).bindPopup('Ma position')
+    }
     if (points.length > 1) {
-      L.polyline(points, { color: '#184f3b', weight: 3, opacity: 0.7 }).addTo(map)
+      L.polyline(points, { color: '#184f3b', weight: 3, opacity: 0.75, dashArray: '6,4' }).addTo(map)
       map.fitBounds(L.latLngBounds(points), { padding: [32, 32] })
-    } else if (points.length === 1) {
-      map.setView(points[0], 14)
-    } else {
-      map.setView([46.6, 2.3], 6)
-    }
+    } else if (points.length === 1) map.setView(points[0], 14)
+    else map.setView([46.6, 2.3], 6)
 
-    return () => {
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove()
-        mapInstanceRef.current = null
-      }
-    }
-  }, [day, startLat, startLng, endLat, endLng])
+    return () => { if (mapInstanceRef.current) { mapInstanceRef.current.remove(); mapInstanceRef.current = null } }
+  }, [day, startLat, startLng, endLat, endLng, userPosition])
 
-  return <div ref={mapRef} style={{ height: 320, borderRadius: 12, marginTop: 8 }} />
+  return <div ref={mapRef} className="day-map" />
 }
 
-// ── Stats d'une journée ───────────────────────────────────────────────────────
-function DayStats({ stats, returnMin, returnKm }) {
-  if (!stats) return null
-  const totalMin = (stats.total_travel_min || 0) + (stats.total_session_min || 0)
-  const travelPct = totalMin ? Math.round((stats.total_travel_min / totalMin) * 100) : 0
+// ── Vue Timeline ──────────────────────────────────────────────────────────────
+function TimelineView({ day, completions, onCompletionToggle, dayStart = '08:00', dayEnd = '19:00' }) {
+  const startMin = parseMin(dayStart)
+  const endMin = parseMin(dayEnd)
+  const totalMin = endMin - startMin
+  const hours = []
+  for (let h = Math.floor(startMin / 60); h <= Math.ceil(endMin / 60); h++) hours.push(h)
+
+  function pct(min) { return Math.max(0, Math.min(100, ((min - startMin) / totalMin) * 100)) }
 
   return (
-    <div className="day-stats">
-      <div className="stat-pill">
-        <span className="stat-value">{stats.total_visits}</span>
-        <span className="stat-label">visites</span>
+    <div className="timeline">
+      {/* Lignes horaires */}
+      <div className="timeline-hours">
+        {hours.map((h) => (
+          <div key={h} className="timeline-hour" style={{ top: `${pct(h * 60)}%` }}>
+            <span>{String(h).padStart(2, '0')}:00</span>
+          </div>
+        ))}
       </div>
-      <div className="stat-pill">
-        <span className="stat-value">{stats.total_km ?? '–'} km</span>
-        <span className="stat-label">trajet</span>
-      </div>
-      <div className="stat-pill">
-        <span className="stat-value">{stats.total_session_min} min</span>
-        <span className="stat-label">soins</span>
-      </div>
-      <div className="stat-pill">
-        <span className="stat-value">{stats.total_travel_min} min</span>
-        <span className="stat-label">déplacement</span>
-      </div>
-      <div className="stat-pill">
-        <span className="stat-value">{travelPct}%</span>
-        <span className="stat-label">temps trajet</span>
+      {/* Visites */}
+      <div className="timeline-track">
+        {day.visits.map((v, i) => {
+          const vs = parseMin(v.start_time)
+          const ve = parseMin(v.end_time)
+          const top = pct(vs)
+          const height = Math.max(2, pct(ve) - top)
+          const key = `${v.patient_id}|${day.date}`
+          const isDone = completions[key]?.done ?? v.done
+          const color = getColor(v.patient_name)
+          return (
+            <div
+              key={`${v.patient_id}-${v.start_time}`}
+              className={`timeline-visit ${isDone ? 'timeline-visit--done' : ''}`}
+              style={{ top: `${top}%`, height: `${height}%`, borderLeft: `4px solid ${color}`, background: color + '18' }}
+              title={`${v.patient_name} — ${v.start_time} à ${v.end_time}`}
+            >
+              <div className="timeline-visit-content">
+                <div className="timeline-visit-time">{v.start_time}</div>
+                <div className="timeline-visit-name">{v.patient_name}</div>
+                <div className="timeline-visit-dur">{v.session_duration_min} min</div>
+              </div>
+              <input
+                type="checkbox"
+                checked={isDone}
+                className="visit-check"
+                onChange={() => onCompletionToggle(v.patient_id, day.date, !isDone, completions[key]?.notes)}
+                onClick={(e) => e.stopPropagation()}
+              />
+            </div>
+          )
+        })}
       </div>
     </div>
   )
 }
 
-// ── Ligne d'une visite (draggable) ────────────────────────────────────────────
-function VisitRow({ visit, index, dayDate, completions, onCompletionToggle, onDragStart, onDragOver, onDrop }) {
-  const key = `${visit.patient_id}|${dayDate}`
-  const completion = completions[key]
-  const isDone = completion?.done ?? visit.done ?? false
-
+// ── Vue tableau ───────────────────────────────────────────────────────────────
+function TableView({ day, completions, onCompletionToggle, onVisitsReorder }) {
+  const [dragFrom, setDragFrom] = useState(null)
   return (
-    <tr
-      className={`visit-row ${isDone ? 'visit-row--done' : ''} ${visit.is_fixed ? 'visit-row--fixed' : ''}`}
-      draggable
-      onDragStart={(e) => onDragStart(e, index)}
-      onDragOver={(e) => { e.preventDefault(); onDragOver(e, index) }}
-      onDrop={(e) => onDrop(e, index)}
-    >
-      <td className="drag-handle" title="Glisser pour réorganiser">⠿</td>
-      <td>
-        <input
-          type="checkbox"
-          checked={isDone}
-          onChange={() => onCompletionToggle(visit.patient_id, dayDate, !isDone, completion?.notes)}
-          className="visit-check"
-          title="Marquer comme effectuée"
-        />
-      </td>
-      <td>
-        <div className="row" style={{ gap: 6 }}>
-          <span>{visit.patient_name}</span>
-          {visit.is_fixed && <span className="badge badge-fixed badge-xs">Fixe</span>}
-        </div>
-        <div className="small muted">{visit.address}</div>
-      </td>
-      <td>{visit.start_time} → {visit.end_time}</td>
-      <td>
-        <div>{visit.estimated_travel_min} min</div>
-        {visit.estimated_km !== undefined && <div className="small muted">{visit.estimated_km} km</div>}
-      </td>
-      <td>{visit.session_duration_min} min</td>
-    </tr>
+    <div className="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th style={{ width: 24 }}></th>
+            <th style={{ width: 32 }}>✓</th>
+            <th>Patient</th>
+            <th>Horaire</th>
+            <th>Trajet</th>
+            <th>Durée</th>
+            <th>GPS</th>
+          </tr>
+        </thead>
+        <tbody>
+          {day.visits.map((visit, i) => {
+            const key = `${visit.patient_id}|${day.date}`
+            const isDone = completions[key]?.done ?? visit.done
+            return (
+              <tr
+                key={`${visit.patient_id}-${visit.start_time}`}
+                className={`visit-row ${isDone ? 'visit-row--done' : ''} ${visit.is_fixed ? 'visit-row--fixed' : ''}`}
+                draggable
+                onDragStart={() => setDragFrom(i)}
+                onDragOver={(e) => e.preventDefault()}
+                onDrop={() => {
+                  if (dragFrom === null || dragFrom === i) return
+                  const nv = [...day.visits]
+                  const [m] = nv.splice(dragFrom, 1)
+                  nv.splice(i, 0, m)
+                  onVisitsReorder(day.day, nv)
+                  setDragFrom(null)
+                }}
+              >
+                <td className="drag-handle">⠿</td>
+                <td>
+                  <input type="checkbox" checked={isDone} className="visit-check"
+                    onChange={() => onCompletionToggle(visit.patient_id, day.date, !isDone, completions[key]?.notes)} />
+                </td>
+                <td>
+                  <div className="row" style={{ gap: 8 }}>
+                    <Avatar name={visit.patient_name} size={28} />
+                    <div>
+                      <div style={{ fontWeight: 600 }}>{visit.patient_name}</div>
+                      <div className="small muted">{visit.address}</div>
+                    </div>
+                  </div>
+                </td>
+                <td><span style={{ fontWeight: 600 }}>{visit.start_time}</span> → {visit.end_time}</td>
+                <td>
+                  <div>{visit.estimated_travel_min} min</div>
+                  {visit.estimated_km !== undefined && <div className="small muted">{visit.estimated_km} km</div>}
+                </td>
+                <td>{visit.session_duration_min} min</td>
+                <td>
+                  {visit.lat && visit.lng && (
+                    <div className="row" style={{ gap: 4 }}>
+                      <button className="btn-gps" onClick={() => navigateTo(visit.lat, visit.lng)} title="Google Maps">🗺</button>
+                      <button className="btn-gps" onClick={() => navigateWaze(visit.lat, visit.lng)} title="Waze">🚗</button>
+                    </div>
+                  )}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+// ── Stats journée ─────────────────────────────────────────────────────────────
+function DayStats({ stats }) {
+  if (!stats) return null
+  const total = (stats.total_travel_min || 0) + (stats.total_session_min || 0)
+  const travelPct = total ? Math.round((stats.total_travel_min / total) * 100) : 0
+  return (
+    <div className="day-stats">
+      <div className="stat-pill"><span className="stat-value">{stats.total_visits}</span><span className="stat-label">visites</span></div>
+      <div className="stat-pill"><span className="stat-value">{stats.total_km ?? '–'} km</span><span className="stat-label">trajet</span></div>
+      <div className="stat-pill"><span className="stat-value">{stats.total_session_min} min</span><span className="stat-label">soins</span></div>
+      <div className="stat-pill"><span className="stat-value">{stats.total_travel_min} min</span><span className="stat-label">déplacement</span></div>
+      <div className="stat-pill"><span className="stat-value">{travelPct}%</span><span className="stat-label">temps trajet</span></div>
+    </div>
   )
 }
 
 // ── Bloc journée ──────────────────────────────────────────────────────────────
-function DayBlock({
-  day,
-  therapist,
-  weeklyConfig,
-  completions,
-  onCompletionToggle,
-  onVisitsReorder,
-  showMap,
-}) {
-  const [dragFrom, setDragFrom] = useState(null)
-  const [showMapLocal, setShowMapLocal] = useState(false)
-
-  function handleDragStart(e, i) {
-    setDragFrom(i)
-    e.dataTransfer.effectAllowed = 'move'
-  }
-  function handleDragOver(e, i) {
-    e.preventDefault()
-  }
-  function handleDrop(e, dropIdx) {
-    e.preventDefault()
-    if (dragFrom === null || dragFrom === dropIdx) return
-    const newVisits = [...day.visits]
-    const [moved] = newVisits.splice(dragFrom, 1)
-    newVisits.splice(dropIdx, 0, moved)
-    onVisitsReorder(day.day, newVisits)
-    setDragFrom(null)
-  }
-
+function DayBlock({ day, therapist, weeklyConfig, completions, onCompletionToggle, onVisitsReorder, viewMode, userPosition }) {
+  const [showMap, setShowMap] = useState(false)
   const dayConfig = weeklyConfig?.[day.day] || {}
   const startLat = dayConfig.start_lat ?? therapist?.default_start_lat
   const startLng = dayConfig.start_lng ?? therapist?.default_start_lng
   const endLat = dayConfig.end_lat ?? therapist?.default_end_lat
   const endLng = dayConfig.end_lng ?? therapist?.default_end_lng
-
-  const dayLabel = `${DAY_LABELS_FR[day.day] || day.day} ${day.date}`
-  const doneCount = day.visits.filter((v) => {
-    const k = `${v.patient_id}|${day.date}`
-    return completions[k]?.done ?? v.done
-  }).length
+  const dayLabel = `${DAY_LABELS_FR[day.day] || day.day} ${new Date(day.date + 'T00:00:00').toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })}`
+  const doneCount = day.visits.filter((v) => completions[`${v.patient_id}|${day.date}`]?.done ?? v.done).length
 
   return (
     <div className="card">
-      {/* En-tête */}
       <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
         <div>
-          <strong style={{ fontSize: 16 }}>{dayLabel}</strong>
-          {day.visits.length > 0 && (
-            <span className="small muted" style={{ marginLeft: 10 }}>
-              {doneCount}/{day.visits.length} effectuées
-            </span>
-          )}
+          <div className="row" style={{ gap: 8 }}>
+            <strong style={{ fontSize: 16 }}>{dayLabel}</strong>
+            {day.visits.length > 0 && (
+              <span className={`badge ${doneCount === day.visits.length ? 'badge-green' : 'badge-inactive'}`}>
+                {doneCount}/{day.visits.length}
+              </span>
+            )}
+          </div>
+          {day.start_address && <div className="small muted">Départ : {day.start_address}</div>}
         </div>
-        <div className="row" style={{ gap: 6 }}>
-          <span className="small muted">
-            {day.start_address ? `Départ: ${day.start_address}` : ''}
-          </span>
-          {day.visits.length > 0 && (
-            <button
-              className="secondary small-btn"
-              onClick={() => setShowMapLocal((v) => !v)}
-            >
-              {showMapLocal ? '🗺 Masquer carte' : '🗺 Voir carte'}
+        {day.visits.length > 0 && (
+          <div className="row" style={{ gap: 6 }}>
+            <button className="btn-gps" style={{ padding: '6px 10px' }}
+              onClick={() => launchFullRoute(day.visits, startLat, startLng, endLat, endLng)}
+              title="Lancer toute la tournée dans Google Maps">
+              🚀 Lancer la tournée
             </button>
-          )}
-        </div>
+            <button className="secondary small-btn" onClick={() => setShowMap((v) => !v)}>
+              {showMap ? '🗺 Masquer carte' : '🗺 Carte'}
+            </button>
+          </div>
+        )}
       </div>
 
-      {/* Stats */}
+      {day.visits.length > 0 && <DayStats stats={day.stats} />}
+
+      {showMap && window.L && (
+        <DayMap day={day} startLat={startLat} startLng={startLng} endLat={endLat} endLng={endLng} userPosition={userPosition} />
+      )}
+
+      {day.visits.length === 0 && <div className="empty-state">Aucune visite planifiée.</div>}
+
       {day.visits.length > 0 && (
-        <DayStats stats={day.stats} returnMin={day.estimated_return_travel_min} returnKm={day.estimated_return_km} />
+        viewMode === 'timeline'
+          ? <TimelineView day={day} completions={completions} onCompletionToggle={onCompletionToggle}
+              dayStart={dayConfig.work_start || '08:00'} dayEnd={dayConfig.work_end || '19:00'} />
+          : <TableView day={day} completions={completions} onCompletionToggle={onCompletionToggle} onVisitsReorder={onVisitsReorder} />
       )}
 
-      {/* Carte */}
-      {showMapLocal && window.L && (
-        <DayMap
-          day={day}
-          startLat={startLat}
-          startLng={startLng}
-          endLat={endLat}
-          endLng={endLng}
-        />
-      )}
-
-      {/* Table des visites */}
-      {day.visits.length === 0 && (
-        <div className="small muted">Aucune visite planifiée.</div>
-      )}
-      {day.visits.length > 0 && (
-        <div className="table-scroll">
-          <table>
-            <thead>
-              <tr>
-                <th style={{ width: 24 }}></th>
-                <th style={{ width: 32 }}>✓</th>
-                <th>Patient</th>
-                <th>Horaire</th>
-                <th>Trajet</th>
-                <th>Durée</th>
-              </tr>
-            </thead>
-            <tbody>
-              {day.visits.map((visit, i) => (
-                <VisitRow
-                  key={`${visit.patient_id}-${visit.start_time}`}
-                  visit={visit}
-                  index={i}
-                  dayDate={day.date}
-                  completions={completions}
-                  onCompletionToggle={onCompletionToggle}
-                  onDragStart={handleDragStart}
-                  onDragOver={handleDragOver}
-                  onDrop={handleDrop}
-                />
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-
-      {/* Retour domicile */}
       {day.visits.length > 0 && day.estimated_return_travel_min !== undefined && (
-        <div className="small muted" style={{ marginTop: 4 }}>
-          Retour : ~{day.estimated_return_travel_min} min
-          {day.estimated_return_km ? ` / ${day.estimated_return_km} km` : ''} vers {day.end_address || 'domicile'}
+        <div className="small muted" style={{ marginTop: 6 }}>
+          Retour : ~{day.estimated_return_travel_min} min{day.estimated_return_km ? ` / ${day.estimated_return_km} km` : ''} → {day.end_address || 'domicile'}
+          {endLat && endLng && (
+            <button className="btn-gps" style={{ marginLeft: 8 }} onClick={() => navigateTo(endLat, endLng, 'Domicile')}>🗺 Rentrer</button>
+          )}
         </div>
       )}
     </div>
@@ -289,86 +291,60 @@ function WeekStats({ weekStats, routingSource }) {
   const { total_visits, total_km, total_travel_min, total_session_min } = weekStats
   const totalMin = total_travel_min + total_session_min
   const travelPct = totalMin ? Math.round((total_travel_min / totalMin) * 100) : 0
-
   return (
     <div className="card week-stats">
       <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap' }}>
         <h3 style={{ margin: 0 }}>Résumé de la semaine</h3>
         <span className={`badge ${routingSource === 'osrm' ? 'badge-green' : 'badge-orange'}`}>
-          {routingSource === 'osrm' ? '🛣 OSRM (temps réels)' : '📐 Euclidien (estimation)'}
+          {routingSource === 'osrm' ? '🛣 Temps réels OSRM' : '📐 Estimation'}
         </span>
       </div>
       <div className="week-stats-grid">
-        <div className="stat-card">
-          <div className="stat-card-value">{total_visits}</div>
-          <div className="stat-card-label">visites</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-card-value">{total_km} km</div>
-          <div className="stat-card-label">parcourus</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-card-value">{Math.round(total_session_min / 60)}h{String(total_session_min % 60).padStart(2, '0')}</div>
-          <div className="stat-card-label">de soins</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-card-value">{Math.round(total_travel_min / 60)}h{String(total_travel_min % 60).padStart(2, '0')}</div>
-          <div className="stat-card-label">de trajet</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-card-value">{travelPct}%</div>
-          <div className="stat-card-label">temps trajet</div>
-        </div>
+        {[
+          { v: total_visits, l: 'visites' },
+          { v: `${total_km} km`, l: 'parcourus' },
+          { v: `${Math.floor(total_session_min/60)}h${String(total_session_min%60).padStart(2,'0')}`, l: 'de soins' },
+          { v: `${Math.floor(total_travel_min/60)}h${String(total_travel_min%60).padStart(2,'0')}`, l: 'de trajet' },
+          { v: `${travelPct}%`, l: 'temps trajet' },
+        ].map((s) => (
+          <div key={s.l} className="stat-card"><div className="stat-card-value">{s.v}</div><div className="stat-card-label">{s.l}</div></div>
+        ))}
       </div>
     </div>
   )
 }
 
 // ── Page principale ───────────────────────────────────────────────────────────
-export default function SchedulePage({
-  schedule,
-  setSchedule,
-  weekStart,
-  setWeekStart,
-  onGenerate,
-  therapist,
-  weeklyConfig,
-  generating,
-}) {
-  const [completions, setCompletions] = useState({}) // key: "patientId|date"
-  const [loadingCompletions, setLoadingCompletions] = useState(false)
+export default function SchedulePage({ schedule, setSchedule, weekStart, setWeekStart, onGenerate, therapist, weeklyConfig, generating }) {
+  const toast = useToast()
+  const [completions, setCompletions] = useState({})
   const [saving, setSaving] = useState(false)
+  const [viewMode, setViewMode] = useState('table') // 'table' | 'timeline'
+  const [userPosition, setUserPosition] = useState(null)
 
-  // Charger les completions quand le planning change
   useEffect(() => {
     if (!schedule?.week_start) return
-    setLoadingCompletions(true)
     api.getCompletions(schedule.week_start)
       .then((data) => {
         const map = {}
         data.forEach((c) => { map[`${c.patient_id}|${c.visit_date}`] = c })
         setCompletions(map)
-      })
-      .catch(() => {})
-      .finally(() => setLoadingCompletions(false))
+      }).catch(() => {})
   }, [schedule?.week_start, schedule?.generated_at])
 
-  async function handleCompletionToggle(patientId, visitDate, done, notes) {
+  async function handleCompletionToggle(patientId, visitDate, done) {
     const key = `${patientId}|${visitDate}`
     try {
-      const updated = await api.upsertCompletion({ patient_id: patientId, visit_date: visitDate, done, notes })
+      const updated = await api.upsertCompletion({ patient_id: patientId, visit_date: visitDate, done })
       setCompletions((prev) => ({ ...prev, [key]: updated }))
-    } catch (e) {
-      console.error(e)
-    }
+      if (done) toast.success('Séance marquée comme effectuée ✓')
+    } catch { toast.error('Erreur lors de la mise à jour') }
   }
 
   function handleVisitsReorder(dayKey, newVisits) {
     setSchedule((prev) => ({
       ...prev,
-      days: prev.days.map((d) =>
-        d.day === dayKey ? { ...d, visits: newVisits } : d
-      ),
+      days: prev.days.map((d) => d.day === dayKey ? { ...d, visits: newVisits } : d),
     }))
   }
 
@@ -377,95 +353,93 @@ export default function SchedulePage({
     setSaving(true)
     try {
       await api.saveSchedule(schedule.week_start, schedule)
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setSaving(false)
-    }
+      toast.success('Planning sauvegardé')
+    } catch { toast.error('Erreur lors de la sauvegarde') } finally { setSaving(false) }
   }
 
-  function handlePrint() {
-    window.print()
+  async function handleLocate() {
+    try {
+      const pos = await getCurrentPosition()
+      setUserPosition(pos)
+      toast.success('Position localisée ✓')
+    } catch { toast.error('Impossible de récupérer votre position') }
+  }
+
+  async function handleCopyWeek() {
+    if (!schedule) return
+    const nextMonday = new Date(new Date(weekStart + 'T00:00:00').getTime() + 7 * 86400000).toISOString().slice(0, 10)
+    try {
+      const generated = await api.generateSchedule(nextMonday)
+      setSchedule(generated)
+      setWeekStart(nextMonday)
+      toast.success('Tournée générée pour la semaine suivante')
+    } catch (e) { toast.error(e.message) }
   }
 
   const activeDays = schedule?.days?.filter((d) => d.visits.length > 0) || []
-  const totalDone = activeDays.reduce((acc, d) => {
-    return acc + d.visits.filter((v) => completions[`${v.patient_id}|${d.date}`]?.done ?? v.done).length
-  }, 0)
+  const totalDone = activeDays.reduce((acc, d) => acc + d.visits.filter((v) => completions[`${v.patient_id}|${d.date}`]?.done ?? v.done).length, 0)
   const totalVisits = activeDays.reduce((acc, d) => acc + d.visits.length, 0)
 
   return (
     <div className="grid" id="schedule-page">
-      {/* Contrôles */}
-      <div className="card row no-print" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+      {/* Barre d'outils */}
+      <div className="card no-print toolbar">
         <div className="row">
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span>Semaine du lundi</span>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, margin: 0 }}>
+            <span className="small" style={{ fontWeight: 600 }}>Semaine du lundi</span>
             <input type="date" value={weekStart} onChange={(e) => setWeekStart(e.target.value)} />
           </label>
         </div>
-        <div className="row" style={{ gap: 8 }}>
+        <div className="row" style={{ gap: 8, flexWrap: 'wrap' }}>
           <button className="primary" onClick={onGenerate} disabled={generating}>
-            {generating ? '⏳ Génération OSRM…' : '⚡ Générer la tournée'}
+            {generating ? '⏳ Génération OSRM…' : '⚡ Générer'}
           </button>
           {schedule && (
             <>
-              <button className="secondary" onClick={handleSaveManual} disabled={saving} title="Sauvegarder les modifications manuelles (drag & drop)">
-                {saving ? '…' : '💾 Sauvegarder'}
-              </button>
-              <button className="secondary" onClick={handlePrint} title="Imprimer le planning">
-                🖨 Imprimer
-              </button>
+              <button className="secondary small-btn" onClick={handleSaveManual} disabled={saving}>{saving ? '…' : '💾'}</button>
+              <button className="secondary small-btn" onClick={handleCopyWeek} title="Générer la semaine suivante">⏭ Semaine +1</button>
+              <button className="secondary small-btn" onClick={handleLocate} title="Ma position">📍 Me localiser</button>
+              <div className="view-toggle">
+                <button className={viewMode === 'table' ? 'active' : ''} onClick={() => setViewMode('table')}>≡ Liste</button>
+                <button className={viewMode === 'timeline' ? 'active' : ''} onClick={() => setViewMode('timeline')}>⏱ Timeline</button>
+              </div>
+              <button className="secondary small-btn" onClick={() => window.print()}>🖨</button>
             </>
           )}
         </div>
       </div>
 
       {!schedule && (
-        <div className="card" style={{ textAlign: 'center', padding: 40, color: '#5b6a65' }}>
-          <div style={{ fontSize: 48, marginBottom: 12 }}>📋</div>
-          <div>Aucune tournée générée pour l'instant.</div>
-          <div className="small" style={{ marginTop: 6 }}>Cliquez sur « Générer la tournée » pour optimiser votre semaine.</div>
+        <div className="card empty-hero">
+          <div className="empty-hero-icon">📋</div>
+          <div className="empty-hero-title">Aucune tournée générée</div>
+          <div className="empty-hero-sub">Cliquez sur « Générer » pour optimiser votre semaine avec les temps de trajet réels.</div>
+          <button className="primary" onClick={onGenerate} disabled={generating} style={{ marginTop: 12 }}>
+            {generating ? '⏳ Génération en cours…' : '⚡ Générer la tournée'}
+          </button>
         </div>
       )}
 
       {schedule && (
         <>
-          {/* Indicateur de progression */}
           {totalVisits > 0 && (
             <div className="card no-print" style={{ padding: '12px 16px' }}>
               <div className="row" style={{ justifyContent: 'space-between' }}>
                 <span className="small">Progression : <strong>{totalDone}/{totalVisits}</strong> séances effectuées</span>
                 <span className="small muted">{Math.round((totalDone / totalVisits) * 100)}%</span>
               </div>
-              <div className="progress-bar">
-                <div className="progress-fill" style={{ width: `${Math.round((totalDone / totalVisits) * 100)}%` }} />
-              </div>
+              <div className="progress-bar"><div className="progress-fill" style={{ width: `${Math.round((totalDone / totalVisits) * 100)}%` }} /></div>
             </div>
           )}
-
-          {/* Stats semaine */}
           <WeekStats weekStats={schedule.week_stats} routingSource={schedule.routing_source} />
-
-          {/* Jours */}
           {schedule.days.map((day) => (
-            <DayBlock
-              key={day.date}
-              day={day}
-              therapist={therapist}
-              weeklyConfig={weeklyConfig}
-              completions={completions}
-              onCompletionToggle={handleCompletionToggle}
-              onVisitsReorder={handleVisitsReorder}
-            />
+            <DayBlock key={day.date} day={day} therapist={therapist} weeklyConfig={weeklyConfig}
+              completions={completions} onCompletionToggle={handleCompletionToggle}
+              onVisitsReorder={handleVisitsReorder} viewMode={viewMode} userPosition={userPosition} />
           ))}
-
-          {/* En-tête d'impression uniquement */}
           <div className="print-only print-header">
             <h1>Tournée — Semaine du {weekStart}</h1>
-            {schedule.week_stats && (
-              <p>{schedule.week_stats.total_visits} visites · {schedule.week_stats.total_km} km · généré le {new Date(schedule.generated_at).toLocaleDateString('fr-FR')}</p>
-            )}
+            {schedule.week_stats && <p>{schedule.week_stats.total_visits} visites · {schedule.week_stats.total_km} km · {new Date(schedule.generated_at).toLocaleDateString('fr-FR')}</p>}
           </div>
         </>
       )}
