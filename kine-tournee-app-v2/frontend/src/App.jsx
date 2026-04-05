@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, useContext } from 'react'
 import { api } from './lib/api'
 import PatientsPage from './pages/PatientsPage'
 import SettingsPage from './pages/SettingsPage'
@@ -6,7 +6,7 @@ import SchedulePage from './pages/SchedulePage'
 import DashboardPage from './pages/DashboardPage'
 import NavigationPage from './pages/NavigationPage'
 import HistoryPage from './pages/HistoryPage'
-import { ToastProvider } from './components/Toast'
+import { ToastProvider, useToast } from './components/Toast'
 import { SkeletonCard } from './components/Skeleton'
 
 function getMonday(date = new Date()) {
@@ -27,6 +27,7 @@ const NAV = [
 ]
 
 function AppInner() {
+  const toast = useToast()
   const [tab, setTab] = useState('dashboard')
   const [loading, setLoading] = useState(true)
   const [generating, setGenerating] = useState(false)
@@ -51,10 +52,16 @@ function AppInner() {
       setPatients(allPatients)
     } catch (e) {
       console.error(e)
+      toast.error('Impossible de joindre le serveur — réessayez dans quelques secondes')
     } finally {
       setLoading(false)
     }
   }
+
+  // Ping silencieux pour réveiller le backend Render (free tier dort après 15min)
+  useEffect(() => {
+    fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:4000'}/`).catch(() => {})
+  }, [])
 
   useEffect(() => { loadAll() }, [])
 
@@ -72,12 +79,18 @@ function AppInner() {
 
   async function handleGenerate() {
     setGenerating(true)
+    toast.info('Génération en cours…')
     try {
       const generated = await api.generateSchedule(weekStart)
       setSchedule(generated)
       setTab('schedule')
+      toast.success('Tournée générée ✓')
     } catch (e) {
       console.error(e)
+      const isNetwork = e.message === 'Failed to fetch'
+      toast.error(isNetwork
+        ? 'Serveur indisponible — il se réveille, réessayez dans 30 secondes'
+        : `Erreur : ${e.message}`)
     } finally {
       setGenerating(false)
     }
