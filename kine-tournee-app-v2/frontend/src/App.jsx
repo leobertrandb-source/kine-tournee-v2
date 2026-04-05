@@ -4,6 +4,7 @@ import PatientsPage from './pages/PatientsPage'
 import SettingsPage from './pages/SettingsPage'
 import SchedulePage from './pages/SchedulePage'
 import DashboardPage from './pages/DashboardPage'
+import NavigationPage from './pages/NavigationPage'
 import { ToastProvider } from './components/Toast'
 import { SkeletonCard } from './components/Skeleton'
 
@@ -16,10 +17,11 @@ function getMonday(date = new Date()) {
 }
 
 const NAV = [
-  { id: 'dashboard', icon: '🏠', label: 'Accueil' },
-  { id: 'schedule',  icon: '📋', label: 'Planning' },
-  { id: 'patients',  icon: '👤', label: 'Patients' },
-  { id: 'settings',  icon: '⚙',  label: 'Config' },
+  { id: 'dashboard',   icon: '🏠', label: 'Accueil' },
+  { id: 'schedule',    icon: '📋', label: 'Planning' },
+  { id: 'navigation',  icon: '🧭', label: 'Navigation GPS' },
+  { id: 'patients',    icon: '👤', label: 'Patients' },
+  { id: 'settings',    icon: '⚙',  label: 'Config' },
 ]
 
 function AppInner() {
@@ -159,6 +161,13 @@ function AppInner() {
               weekStart={weekStart} setWeekStart={setWeekStart}
               onGenerate={handleGenerate} therapist={therapist}
               weeklyConfig={weeklyConfig} generating={generating}
+            />
+          )}
+          {tab === 'navigation' && (
+            <NavigationPage
+              schedule={schedule}
+              weeklyConfig={weeklyConfig}
+              therapist={therapist}
             />
           )}
           {tab === 'patients' && (
