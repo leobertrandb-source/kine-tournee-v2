@@ -27,7 +27,7 @@ function makeDefaultAvailability() {
 }
 
 const EMPTY = {
-  full_name: '', address: '', lat: '', lng: '', phone: '', doctor_name: '',
+  full_name: '', address: '', lat: '', lng: '', phone: '', email: '', doctor_name: '',
   prescription_sessions_total: '', prescription_sessions_done: 0,
   session_duration_min: 30, sessions_per_week: 2, is_fixed: false, active: true,
   notes: '', availability: makeDefaultAvailability(),
@@ -278,6 +278,9 @@ export default function PatientsPage({ patients, setPatients }) {
             <label>Nom complet *<input value={form.full_name} onChange={(e) => setField('full_name', e.target.value)} required /></label>
             <label>Téléphone<input value={form.phone} onChange={(e) => setField('phone', e.target.value)} placeholder="06 XX XX XX XX" /></label>
           </div>
+          <label>Email (pour les notifications)
+            <input type="email" value={form.email || ''} onChange={(e) => setField('email', e.target.value)} placeholder="patient@email.fr" />
+          </label>
           <label>Adresse *
             <div className="row" style={{ gap: 6 }}>
               <input value={form.address} onChange={(e) => setField('address', e.target.value)} required style={{ flex: 1 }} />

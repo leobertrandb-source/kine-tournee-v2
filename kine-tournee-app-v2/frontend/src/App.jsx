@@ -171,6 +171,7 @@ function AppInner() {
               weekStart={weekStart} setWeekStart={setWeekStart}
               onGenerate={handleGenerate} therapist={therapist}
               weeklyConfig={weeklyConfig} generating={generating}
+              patients={patients}
             />
           )}
           {tab === 'navigation' && (

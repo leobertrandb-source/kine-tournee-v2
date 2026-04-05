@@ -691,6 +691,47 @@ pre { overflow: auto; background: #0f172a; color: #e5eef7; padding: 12px; border
 .nav-marker--done { background: #22c55e !important; }
 .nav-marker--next { box-shadow: 0 0 0 3px #f59e0b, 0 0 0 6px rgba(245,158,11,.3) !important; }
 
+/* ── Bouton Notifier ──────────────────────────────────────────────────────── */
+.btn-notify {
+  padding: 7px 13px; border-radius: var(--radius-sm);
+  border: 1.5px solid #7c3aed; background: #f5f3ff; color: #7c3aed;
+  font-weight: 700; font-size: 13px; cursor: pointer;
+  transition: background .15s;
+}
+.btn-notify:hover { background: #ede9fe; }
+[data-theme="dark"] .btn-notify { background: #1e1b4b; border-color: #818cf8; color: #a5b4fc; }
+
+/* ── Modal notifications ──────────────────────────────────────────────────── */
+.notif-modal {
+  max-width: 580px; width: 95vw;
+  max-height: 85vh; display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.notif-list { flex: 1; overflow-y: auto; }
+.notif-row { border-bottom: 1px solid var(--border); }
+.notif-row-header {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 12px 16px; cursor: pointer;
+}
+.notif-row-header:hover { background: var(--surface2); }
+.notif-row-btns { display: flex; align-items: center; gap: 6px; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
+.notif-btn {
+  padding: 5px 10px; border-radius: var(--radius-sm); font-size: 12px;
+  font-weight: 700; text-decoration: none; border: none; cursor: pointer;
+  white-space: nowrap;
+}
+.notif-btn--wa   { background: #25d366; color: #fff; }
+.notif-btn--mail { background: #4285f4; color: #fff; }
+.notif-btn--copy { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }
+.notif-btn:hover { opacity: .85; }
+.notif-chevron { color: var(--muted); font-size: 11px; margin-left: 4px; }
+.notif-preview {
+  margin: 0; padding: 12px 16px 14px;
+  background: var(--surface2); border-top: 1px solid var(--border);
+  font-family: inherit; font-size: 13px; line-height: 1.6;
+  white-space: pre-wrap; color: var(--text2);
+}
+
 /* ── Historique ────────────────────────────────────────────────────────────── */
 .history-list { display: flex; flex-direction: column; gap: 8px; }
 .history-week-row {

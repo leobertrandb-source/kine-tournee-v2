@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { getCurrentPosition, launchFullRoute, navigateTo, navigateWaze } from '../lib/gps'
 import { useToast } from '../components/Toast'
+import NotifyModal from '../components/NotifyModal'
 
 const DAY_LABELS_FR = {
   monday: 'Lundi', tuesday: 'Mardi', wednesday: 'Mercredi',
@@ -315,12 +316,13 @@ function WeekStats({ weekStats, routingSource }) {
 }
 
 // ── Page principale ───────────────────────────────────────────────────────────
-export default function SchedulePage({ schedule, setSchedule, weekStart, setWeekStart, onGenerate, therapist, weeklyConfig, generating }) {
+export default function SchedulePage({ schedule, setSchedule, weekStart, setWeekStart, onGenerate, therapist, weeklyConfig, generating, patients }) {
   const toast = useToast()
   const [completions, setCompletions] = useState({})
   const [saving, setSaving] = useState(false)
   const [viewMode, setViewMode] = useState('table') // 'table' | 'timeline'
   const [userPosition, setUserPosition] = useState(null)
+  const [showNotify, setShowNotify] = useState(false)
 
   useEffect(() => {
     if (!schedule?.week_start) return
@@ -382,6 +384,14 @@ export default function SchedulePage({ schedule, setSchedule, weekStart, setWeek
 
   return (
     <div className="grid" id="schedule-page">
+      {showNotify && (
+        <NotifyModal
+          schedule={schedule}
+          patients={patients || []}
+          therapist={therapist}
+          onClose={() => setShowNotify(false)}
+        />
+      )}
       {/* Barre d'outils */}
       <div className="card no-print toolbar">
         <div className="row">
@@ -399,6 +409,7 @@ export default function SchedulePage({ schedule, setSchedule, weekStart, setWeek
               <button className="secondary small-btn" onClick={handleSaveManual} disabled={saving}>{saving ? '…' : '💾'}</button>
               <button className="secondary small-btn" onClick={handleCopyWeek} title="Générer la semaine suivante">⏭ Semaine +1</button>
               <button className="secondary small-btn" onClick={handleLocate} title="Ma position">📍 Me localiser</button>
+              <button className="btn-notify" onClick={() => setShowNotify(true)} title="Envoyer les horaires aux patients">📱 Notifier</button>
               <div className="view-toggle">
                 <button className={viewMode === 'table' ? 'active' : ''} onClick={() => setViewMode('table')}>≡ Liste</button>
                 <button className={viewMode === 'timeline' ? 'active' : ''} onClick={() => setViewMode('timeline')}>⏱ Timeline</button>
