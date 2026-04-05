@@ -1,5 +1,6 @@
 import express from 'express'
 import cors from 'cors'
+import { createClient } from '@supabase/supabase-js'
 import { getSupabaseAdmin } from './_lib/supabase.js'
 import { generateSchedule } from './_lib/scheduler.js'
 
@@ -7,33 +8,55 @@ const app = express()
 app.use(cors())
 app.use(express.json())
 
-const supabase = getSupabaseAdmin()
+const adminSupabase = getSupabaseAdmin()
 
-app.get('/api/', (_req, res) => res.json({ ok: true, service: 'Kiné Tournée V2 API' }))
-app.get('/',    (_req, res) => res.json({ ok: true, service: 'Kiné Tournée V2 API' }))
+// ── Middleware auth : vérifie le JWT et crée un client Supabase par utilisateur ─
+app.use(async (req, res, next) => {
+  // Routes publiques
+  if (req.path === '/' || req.path === '/api/') return next()
+
+  const token = req.headers.authorization?.split(' ')[1]
+  if (!token) return res.status(401).json({ error: 'Non authentifié' })
+
+  // Vérifier le token via le client admin
+  const { data: { user }, error } = await adminSupabase.auth.getUser(token)
+  if (error || !user) return res.status(401).json({ error: 'Session invalide — reconnectez-vous' })
+
+  req.userId = user.id
+
+  // Client Supabase avec le JWT de l'utilisateur → RLS s'applique automatiquement
+  req.db = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_ANON_KEY,
+    { global: { headers: { Authorization: `Bearer ${token}` } } }
+  )
+  next()
+})
+
+app.get('/api/', (_req, res) => res.json({ ok: true }))
+app.get('/',    (_req, res) => res.json({ ok: true }))
 
 // ── Bootstrap ─────────────────────────────────────────────────────────────────
-app.get('/api/bootstrap', async (_req, res) => {
-  const [{ data: therapist, error: therapistError }, { data: weeklyConfig, error: weeklyError }] =
-    await Promise.all([
-      supabase.from('therapist_profile').select('*').limit(1).maybeSingle(),
-      supabase.from('therapist_day_config').select('*').order('day_index', { ascending: true }),
-    ])
-  if (therapistError || weeklyError)
-    return res.status(500).json({ error: therapistError?.message || weeklyError?.message })
-  const weekly = Object.fromEntries((weeklyConfig ?? []).map((row) => [row.day_key, row]))
+app.get('/api/bootstrap', async (req, res) => {
+  const [{ data: therapist, error: e1 }, { data: weeklyConfig, error: e2 }] = await Promise.all([
+    req.db.from('therapist_profile').select('*').eq('user_id', req.userId).maybeSingle(),
+    req.db.from('therapist_day_config').select('*').eq('user_id', req.userId).order('day_index'),
+  ])
+  if (e1 || e2) return res.status(500).json({ error: e1?.message || e2?.message })
+  const weekly = Object.fromEntries((weeklyConfig ?? []).map((r) => [r.day_key, r]))
   res.json({ therapist, weeklyConfig: weekly })
 })
 
 // ── Patients ──────────────────────────────────────────────────────────────────
-app.get('/api/patients', async (_req, res) => {
-  const { data, error } = await supabase.from('patients').select('*').order('full_name')
+app.get('/api/patients', async (req, res) => {
+  const { data, error } = await req.db.from('patients').select('*').order('full_name')
   if (error) return res.status(500).json({ error: error.message })
   res.json(data)
 })
 
 app.post('/api/patients', async (req, res) => {
-  const { data, error } = await supabase.from('patients').insert(req.body).select().single()
+  const { data, error } = await req.db.from('patients')
+    .insert({ ...req.body, user_id: req.userId }).select().single()
   if (error) return res.status(400).json({ error: error.message })
   res.status(201).json(data)
 })
@@ -44,7 +67,6 @@ app.put('/api/patients/:id', async (req, res) => {
     session_duration_min, sessions_per_week, active, availability,
     notes, is_fixed, prescription_sessions_total, prescription_sessions_done,
   } = req.body
-
   const patch = {
     ...(full_name               !== undefined && { full_name }),
     ...(address                 !== undefined && { address }),
@@ -62,14 +84,13 @@ app.put('/api/patients/:id', async (req, res) => {
     ...(prescription_sessions_total !== undefined && { prescription_sessions_total }),
     ...(prescription_sessions_done  !== undefined && { prescription_sessions_done }),
   }
-
-  const { data, error } = await supabase.from('patients').update(patch).eq('id', req.params.id).select().single()
+  const { data, error } = await req.db.from('patients').update(patch).eq('id', req.params.id).select().single()
   if (error) return res.status(400).json({ error: error.message })
   res.json(data)
 })
 
 app.delete('/api/patients/:id', async (req, res) => {
-  const { error } = await supabase.from('patients').delete().eq('id', req.params.id)
+  const { error } = await req.db.from('patients').delete().eq('id', req.params.id)
   if (error) return res.status(400).json({ error: error.message })
   res.json({ ok: true })
 })
@@ -79,26 +100,26 @@ app.get('/api/absences', async (req, res) => {
   const { weekStart } = req.query
   if (!weekStart) return res.status(400).json({ error: 'weekStart required' })
   const end = new Date(new Date(`${weekStart}T00:00:00`).getTime() + 6 * 86400000).toISOString().slice(0, 10)
-  const { data, error } = await supabase.from('patient_absences').select('*').gte('absence_date', weekStart).lte('absence_date', end)
+  const { data, error } = await req.db.from('patient_absences').select('*').gte('absence_date', weekStart).lte('absence_date', end)
   if (error) return res.status(500).json({ error: error.message })
   res.json(data)
 })
 
 app.get('/api/patients/:id/absences', async (req, res) => {
-  const { data, error } = await supabase.from('patient_absences').select('*').eq('patient_id', req.params.id).order('absence_date')
+  const { data, error } = await req.db.from('patient_absences').select('*').eq('patient_id', req.params.id).order('absence_date')
   if (error) return res.status(500).json({ error: error.message })
   res.json(data)
 })
 
 app.post('/api/patients/:id/absences', async (req, res) => {
-  const { data, error } = await supabase.from('patient_absences')
-    .upsert({ patient_id: req.params.id, ...req.body }, { onConflict: 'patient_id,absence_date' }).select().single()
+  const { data, error } = await req.db.from('patient_absences')
+    .upsert({ patient_id: req.params.id, user_id: req.userId, ...req.body }, { onConflict: 'patient_id,absence_date' }).select().single()
   if (error) return res.status(400).json({ error: error.message })
   res.status(201).json(data)
 })
 
 app.delete('/api/patients/:id/absences/:date', async (req, res) => {
-  const { error } = await supabase.from('patient_absences').delete().eq('patient_id', req.params.id).eq('absence_date', req.params.date)
+  const { error } = await req.db.from('patient_absences').delete().eq('patient_id', req.params.id).eq('absence_date', req.params.date)
   if (error) return res.status(400).json({ error: error.message })
   res.json({ ok: true })
 })
@@ -108,29 +129,29 @@ app.get('/api/completions', async (req, res) => {
   const { weekStart } = req.query
   if (!weekStart) return res.status(400).json({ error: 'weekStart required' })
   const end = new Date(new Date(`${weekStart}T00:00:00`).getTime() + 6 * 86400000).toISOString().slice(0, 10)
-  const { data, error } = await supabase.from('visit_completions').select('*').gte('visit_date', weekStart).lte('visit_date', end)
+  const { data, error } = await req.db.from('visit_completions').select('*').gte('visit_date', weekStart).lte('visit_date', end)
   if (error) return res.status(500).json({ error: error.message })
   res.json(data)
 })
 
 app.post('/api/completions', async (req, res) => {
-  const { data, error } = await supabase.from('visit_completions')
-    .upsert({ ...req.body, updated_at: new Date().toISOString() }, { onConflict: 'patient_id,visit_date' }).select().single()
+  const { data, error } = await req.db.from('visit_completions')
+    .upsert({ ...req.body, user_id: req.userId, updated_at: new Date().toISOString() }, { onConflict: 'patient_id,visit_date' }).select().single()
   if (error) return res.status(400).json({ error: error.message })
   res.json(data)
 })
 
 // ── Thérapeute ────────────────────────────────────────────────────────────────
 app.put('/api/therapist/profile', async (req, res) => {
-  const { data, error } = await supabase.from('therapist_profile')
-    .upsert({ id: 1, ...req.body, updated_at: new Date().toISOString() }).select().single()
+  const { data, error } = await req.db.from('therapist_profile')
+    .upsert({ ...req.body, user_id: req.userId, updated_at: new Date().toISOString() }, { onConflict: 'user_id' }).select().single()
   if (error) return res.status(400).json({ error: error.message })
   res.json(data)
 })
 
 app.put('/api/therapist/day-config/:dayKey', async (req, res) => {
-  const { data, error } = await supabase.from('therapist_day_config')
-    .upsert({ ...req.body, day_key: req.params.dayKey, updated_at: new Date().toISOString() }, { onConflict: 'day_key' }).select().single()
+  const { data, error } = await req.db.from('therapist_day_config')
+    .upsert({ ...req.body, day_key: req.params.dayKey, user_id: req.userId, updated_at: new Date().toISOString() }, { onConflict: 'user_id,day_key' }).select().single()
   if (error) return res.status(400).json({ error: error.message })
   res.json(data)
 })
@@ -147,20 +168,24 @@ app.post('/api/schedule/generate', async (req, res) => {
     { data: patients, error: e3 },
     { data: absences, error: e4 },
   ] = await Promise.all([
-    supabase.from('therapist_profile').select('*').limit(1).maybeSingle(),
-    supabase.from('therapist_day_config').select('*').order('day_index'),
-    supabase.from('patients').select('*').eq('active', true),
-    supabase.from('patient_absences').select('patient_id,absence_date').gte('absence_date', weekStart).lte('absence_date', weekEnd),
+    req.db.from('therapist_profile').select('*').eq('user_id', req.userId).maybeSingle(),
+    req.db.from('therapist_day_config').select('*').eq('user_id', req.userId).order('day_index'),
+    req.db.from('patients').select('*').eq('active', true),
+    req.db.from('patient_absences').select('patient_id,absence_date').gte('absence_date', weekStart).lte('absence_date', weekEnd),
   ])
   if (e1 || e2 || e3 || e4) return res.status(500).json({ error: e1?.message || e2?.message || e3?.message || e4?.message })
 
   try {
     const weeklyConfig = Object.fromEntries((weeklyRows ?? []).map((r) => [r.day_key, r]))
     const absentSet = new Set((absences ?? []).map((a) => `${a.patient_id}|${a.absence_date}`))
-    const schedule = await generateSchedule({ weekStart, therapist, weeklyConfig, patients: patients ?? [],
-      travelBuffer: therapist?.travel_buffer_min ?? 10, sessionBuffer: therapist?.session_buffer_min ?? 5, absentSet })
-
-    const { error: insertError } = await supabase.from('generated_schedules').insert({ week_start: weekStart, payload: schedule })
+    const schedule = await generateSchedule({
+      weekStart, therapist, weeklyConfig, patients: patients ?? [],
+      travelBuffer: therapist?.travel_buffer_min ?? 10,
+      sessionBuffer: therapist?.session_buffer_min ?? 5,
+      absentSet,
+    })
+    const { error: insertError } = await req.db.from('generated_schedules')
+      .insert({ week_start: weekStart, payload: schedule, user_id: req.userId })
     if (insertError) return res.status(500).json({ error: insertError.message })
     res.json(schedule)
   } catch (err) {
@@ -171,7 +196,7 @@ app.post('/api/schedule/generate', async (req, res) => {
 app.get('/api/schedule', async (req, res) => {
   const { weekStart } = req.query
   if (!weekStart) return res.status(400).json({ error: 'weekStart required' })
-  const { data, error } = await supabase.from('generated_schedules').select('*')
+  const { data, error } = await req.db.from('generated_schedules').select('*')
     .eq('week_start', weekStart).order('created_at', { ascending: false }).limit(1).maybeSingle()
   if (error) return res.status(500).json({ error: error.message })
   res.json(data?.payload ?? { week_start: weekStart, days: [] })
@@ -180,13 +205,14 @@ app.get('/api/schedule', async (req, res) => {
 app.post('/api/schedule/save', async (req, res) => {
   const { weekStart, schedule } = req.body
   if (!weekStart || !schedule) return res.status(400).json({ error: 'weekStart et schedule requis' })
-  const { error } = await supabase.from('generated_schedules').insert({ week_start: weekStart, payload: schedule })
+  const { error } = await req.db.from('generated_schedules')
+    .insert({ week_start: weekStart, payload: schedule, user_id: req.userId })
   if (error) return res.status(500).json({ error: error.message })
   res.json({ ok: true })
 })
 
-app.get('/api/schedules/history', async (_req, res) => {
-  const { data, error } = await supabase.from('generated_schedules')
+app.get('/api/schedules/history', async (req, res) => {
+  const { data, error } = await req.db.from('generated_schedules')
     .select('id, week_start, created_at, payload').order('week_start', { ascending: false })
   if (error) return res.status(500).json({ error: error.message })
   const byWeek = new Map()

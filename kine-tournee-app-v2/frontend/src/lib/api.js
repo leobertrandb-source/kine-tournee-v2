@@ -1,12 +1,19 @@
 // Toujours utiliser des URLs relatives sur Vercel (même domaine).
-// VITE_API_URL reste utilisé uniquement en dev local (localhost).
 const _raw = import.meta.env.VITE_API_URL || ''
 const API_URL = _raw.includes('localhost') ? _raw : ''
 
 async function req(method, path, body) {
+  // Attacher le JWT Supabase pour l'authentification backend
+  let authHeader = {}
+  try {
+    const { supabase } = await import('./supabase.js')
+    const { data: { session } } = await supabase.auth.getSession()
+    if (session?.access_token) authHeader = { Authorization: `Bearer ${session.access_token}` }
+  } catch { /* pas de session */ }
+
   const res = await fetch(`${API_URL}${path}`, {
     method,
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeader },
     ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
   })
 
