@@ -76,7 +76,6 @@ app.put('/api/patients/:id', async (req, res) => {
     ...(is_fixed                !== undefined && { is_fixed }),
     ...(prescription_sessions_total !== undefined && { prescription_sessions_total }),
     ...(prescription_sessions_done  !== undefined && { prescription_sessions_done }),
-    updated_at: new Date().toISOString(),
   }
 
   const { data, error } = await supabase
