@@ -63,8 +63,10 @@ app.get('/api/patients', async (req, res) => {
 })
 
 app.post('/api/patients', async (req, res) => {
-  const { data, error } = await req.db.from('patients')
-    .insert({ ...req.body, user_id: req.userId }).select().single()
+  const body = { ...req.body, user_id: req.userId }
+  // 'name' is the original NOT NULL column; keep it in sync with full_name
+  if (body.full_name && !body.name) body.name = body.full_name
+  const { data, error } = await req.db.from('patients').insert(body).select().single()
   if (error) return res.status(400).json({ error: error.message })
   res.status(201).json(data)
 })
@@ -76,7 +78,7 @@ app.put('/api/patients/:id', async (req, res) => {
     notes, is_fixed, prescription_sessions_total, prescription_sessions_done,
   } = req.body
   const patch = {
-    ...(full_name               !== undefined && { full_name }),
+    ...(full_name               !== undefined && { full_name, name: full_name }),
     ...(address                 !== undefined && { address }),
     ...(lat                     !== undefined && { lat }),
     ...(lng                     !== undefined && { lng }),
