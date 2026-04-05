@@ -5,6 +5,7 @@ import SettingsPage from './pages/SettingsPage'
 import SchedulePage from './pages/SchedulePage'
 import DashboardPage from './pages/DashboardPage'
 import NavigationPage from './pages/NavigationPage'
+import HistoryPage from './pages/HistoryPage'
 import { ToastProvider } from './components/Toast'
 import { SkeletonCard } from './components/Skeleton'
 
@@ -20,6 +21,7 @@ const NAV = [
   { id: 'dashboard',   icon: '🏠', label: 'Accueil' },
   { id: 'schedule',    icon: '📋', label: 'Planning' },
   { id: 'navigation',  icon: '🧭', label: 'Navigation GPS' },
+  { id: 'history',     icon: '📅', label: 'Historique' },
   { id: 'patients',    icon: '👤', label: 'Patients' },
   { id: 'settings',    icon: '⚙',  label: 'Config' },
 ]
@@ -170,6 +172,7 @@ function AppInner() {
               therapist={therapist}
             />
           )}
+          {tab === 'history' && <HistoryPage />}
           {tab === 'patients' && (
             <PatientsPage patients={patients} setPatients={setPatients} />
           )}

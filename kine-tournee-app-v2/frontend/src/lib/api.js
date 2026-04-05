@@ -44,4 +44,5 @@ export const api = {
   generateSchedule: (weekStart) => req('POST', '/api/schedule/generate', { weekStart }),
   getSchedule: (weekStart) => req('GET', `/api/schedule?weekStart=${encodeURIComponent(weekStart)}`),
   saveSchedule: (weekStart, schedule) => req('POST', '/api/schedule/save', { weekStart, schedule }),
+  getScheduleHistory: () => req('GET', '/api/schedules/history'),
 }
