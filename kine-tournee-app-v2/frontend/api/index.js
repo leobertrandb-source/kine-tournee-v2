@@ -10,25 +10,33 @@ app.use(express.json())
 
 const adminSupabase = getSupabaseAdmin()
 
-// ── Middleware auth : vérifie le JWT et crée un client Supabase par utilisateur ─
-app.use(async (req, res, next) => {
-  // Routes publiques
+// Décode le payload JWT localement — pas d'appel réseau, évite les timeouts
+function decodeJwt(token) {
+  try {
+    const b64 = token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/')
+    const payload = JSON.parse(Buffer.from(b64, 'base64').toString('utf8'))
+    if (!payload.sub || (payload.exp && payload.exp < Date.now() / 1000)) return null
+    return payload
+  } catch { return null }
+}
+
+// ── Middleware auth ────────────────────────────────────────────────────────────
+app.use((req, res, next) => {
   if (req.path === '/' || req.path === '/api/') return next()
 
   const token = req.headers.authorization?.split(' ')[1]
   if (!token) return res.status(401).json({ error: 'Non authentifié' })
 
-  // Vérifier le token via le client admin
-  const { data: { user }, error } = await adminSupabase.auth.getUser(token)
-  if (error || !user) return res.status(401).json({ error: 'Session invalide — reconnectez-vous' })
+  const payload = decodeJwt(token)
+  if (!payload) return res.status(401).json({ error: 'Session expirée — reconnectez-vous' })
 
-  req.userId = user.id
+  req.userId = payload.sub
 
   // Client Supabase avec le JWT de l'utilisateur → RLS s'applique automatiquement
   req.db = createClient(
     process.env.SUPABASE_URL,
-    process.env.SUPABASE_ANON_KEY,
-    { global: { headers: { Authorization: `Bearer ${token}` } } }
+    process.env.SUPABASE_ANON_KEY || process.env.SUPABASE_SERVICE_ROLE_KEY,
+    { global: { headers: { Authorization: `Bearer ${token}` } }, auth: { persistSession: false } }
   )
   next()
 })
