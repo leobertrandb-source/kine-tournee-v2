@@ -147,8 +147,30 @@ export default function PatientsPage({ patients, setPatients }) {
   const [absences, setAbsences] = useState([])
   const [searchQuery, setSearchQuery] = useState('')
   const [deleteModal, setDeleteModal] = useState(null)
+  const [geocodingAll, setGeocodingAll] = useState(false)
 
   function setField(key, value) { setForm((prev) => ({ ...prev, [key]: value })) }
+
+  async function geocodeAll() {
+    const missing = patients.filter((p) => p.active && p.address && (!p.lat || !p.lng))
+    if (!missing.length) { toast.info('Tous les patients ont déjà des coordonnées GPS'); return }
+    setGeocodingAll(true)
+    toast.info(`Géolocalisation de ${missing.length} patient(s)…`)
+    let ok = 0
+    for (const p of missing) {
+      const result = await geocodeAddress(p.address)
+      if (result) {
+        try {
+          const updated = await api.updatePatient(p.id, { lat: result.lat, lng: result.lng })
+          setPatients((prev) => prev.map((x) => x.id === p.id ? updated : x))
+          ok++
+        } catch { /* continue */ }
+      }
+      await new Promise((r) => setTimeout(r, 1100)) // respecter le rate-limit Nominatim (1 req/s)
+    }
+    setGeocodingAll(false)
+    toast.success(`${ok}/${missing.length} patient(s) géolocalisé(s)`)
+  }
 
   async function handleGeocode() {
     if (!form.address) return
@@ -179,10 +201,19 @@ export default function PatientsPage({ patients, setPatients }) {
     e.preventDefault()
     setSaving(true)
     try {
+      let lat = form.lat === '' ? null : Number(form.lat)
+      let lng = form.lng === '' ? null : Number(form.lng)
+
+      // Auto-géolocaliser si l'adresse est renseignée mais les coordonnées manquent
+      if (form.address && (!lat || !lng)) {
+        toast.info('Géolocalisation automatique…')
+        const result = await geocodeAddress(form.address)
+        if (result) { lat = result.lat; lng = result.lng; toast.success('Adresse géolocalisée ✓') }
+        else toast.warning('Adresse introuvable — le patient sera ajouté sans coordonnées GPS')
+      }
+
       const payload = {
-        ...form,
-        lat: form.lat === '' ? null : Number(form.lat),
-        lng: form.lng === '' ? null : Number(form.lng),
+        ...form, lat, lng,
         prescription_sessions_total: form.prescription_sessions_total === '' ? null : Number(form.prescription_sessions_total),
         prescription_sessions_done: Number(form.prescription_sessions_done || 0),
       }
@@ -286,9 +317,14 @@ export default function PatientsPage({ patients, setPatients }) {
 
       {/* Liste */}
       <div className="card grid">
-        <div className="row" style={{ justifyContent: 'space-between' }}>
+        <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'wrap', gap: 8 }}>
           <h2 style={{ margin: 0 }}>Patients ({filtered.length})</h2>
-          <input placeholder="Rechercher…" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={{ width: 170 }} />
+          <div className="row" style={{ gap: 6 }}>
+            <input placeholder="Rechercher…" value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} style={{ width: 140 }} />
+            <button className="secondary small-btn" onClick={geocodeAll} disabled={geocodingAll} title="Géolocaliser les patients sans coordonnées GPS">
+              {geocodingAll ? '…' : '📍 Tout géolocaliser'}
+            </button>
+          </div>
         </div>
         <div className="patient-list">
           {filtered.map((p) => {
@@ -303,6 +339,7 @@ export default function PatientsPage({ patients, setPatients }) {
                       {p.is_fixed && <span className="badge badge-fixed badge-xs">Fixe</span>}
                       {!p.active && <span className="badge badge-inactive badge-xs">Inactif</span>}
                       {alert && <span className={`badge badge-xs ${alert === 'épuisé' ? 'badge-red' : 'badge-orange'}`}>{alert}</span>}
+                      {(!p.lat || !p.lng) && <span className="badge badge-xs badge-orange" title="Pas de coordonnées GPS — invisible sur la carte">📍 sans GPS</span>}
                     </div>
                     <div className="small muted">{p.address}</div>
                     {p.phone && <div className="small muted">{p.phone}</div>}
