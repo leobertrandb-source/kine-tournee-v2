@@ -53,9 +53,34 @@ app.post('/api/patients', async (req, res) => {
 })
 
 app.put('/api/patients/:id', async (req, res) => {
+  // On extrait uniquement les colonnes connues pour éviter les erreurs Supabase
+  const {
+    full_name, address, lat, lng, phone, doctor_name,
+    session_duration_min, sessions_per_week, active, availability,
+    notes, is_fixed,
+    prescription_sessions_total, prescription_sessions_done,
+  } = req.body
+
+  const patch = {
+    ...(full_name               !== undefined && { full_name }),
+    ...(address                 !== undefined && { address }),
+    ...(lat                     !== undefined && { lat }),
+    ...(lng                     !== undefined && { lng }),
+    ...(phone                   !== undefined && { phone }),
+    ...(doctor_name             !== undefined && { doctor_name }),
+    ...(session_duration_min    !== undefined && { session_duration_min }),
+    ...(sessions_per_week       !== undefined && { sessions_per_week }),
+    ...(active                  !== undefined && { active }),
+    ...(availability            !== undefined && { availability }),
+    ...(notes                   !== undefined && { notes }),
+    ...(is_fixed                !== undefined && { is_fixed }),
+    ...(prescription_sessions_total !== undefined && { prescription_sessions_total }),
+    ...(prescription_sessions_done  !== undefined && { prescription_sessions_done }),
+  }
+
   const { data, error } = await supabase
     .from('patients')
-    .update({ ...req.body, updated_at: new Date().toISOString() })
+    .update(patch)
     .eq('id', req.params.id)
     .select()
     .single()
