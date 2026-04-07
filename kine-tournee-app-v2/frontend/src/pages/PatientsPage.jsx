@@ -21,7 +21,7 @@ function Avatar({ name, size = 40 }) {
 
 const EMPTY = {
   full_name: '', address: '', lat: '', lng: '', phone: '', email: '', doctor_name: '',
-  prescription_sessions_total: '', prescription_sessions_done: 0,
+  prescription_sessions_total: '', prescription_sessions_done: '',
   session_duration_min: 30, sessions_per_week: 2, is_fixed: false, active: true,
   notes: '', availability: {},
 }
