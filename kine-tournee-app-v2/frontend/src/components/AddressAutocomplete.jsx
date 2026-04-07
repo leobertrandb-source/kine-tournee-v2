@@ -61,7 +61,7 @@ export default function AddressAutocomplete({ value, onChange, onSelect, placeho
           {suggestions.map((s, i) => (
             <li key={i} className="address-suggestion-item" onMouseDown={() => handleSelect(s)}>
               <span>{s.display}</span>
-              <span className={`address-suggestion-type ${s.precise ? 'address-suggestion-type--ok' : 'address-suggestion-type--approx'}`}>
+              <span className={`address-suggestion-type ${s.source === 'photon' ? 'address-suggestion-type--poi' : s.precise ? 'address-suggestion-type--ok' : 'address-suggestion-type--approx'}`}>
                 {s.typeLabel}
               </span>
             </li>

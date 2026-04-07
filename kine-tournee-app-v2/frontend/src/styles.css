@@ -408,6 +408,7 @@ tr:last-child td { border-bottom: none; }
 }
 .address-suggestion-type--ok    { background: var(--green-light); color: var(--green); }
 .address-suggestion-type--approx { background: var(--orange-light); color: var(--orange); }
+.address-suggestion-type--poi   { background: var(--blue-light); color: var(--blue); }
 .address-imprecise-warn {
   margin-top: 6px; padding: 8px 12px; border-radius: var(--radius-sm);
   background: var(--orange-light); color: var(--orange);
