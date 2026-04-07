@@ -29,6 +29,7 @@ const EMPTY = {
 function AddressAutocomplete({ value, onChange, onSelect }) {
   const [suggestions, setSuggestions] = useState([])
   const [open, setOpen] = useState(false)
+  const [imprecise, setImprecise] = useState(false)
   const timerRef = useRef(null)
   const wrapRef = useRef(null)
 
@@ -41,6 +42,7 @@ function AddressAutocomplete({ value, onChange, onSelect }) {
   function handleChange(e) {
     const q = e.target.value
     onChange(q)
+    setImprecise(false)
     clearTimeout(timerRef.current)
     if (q.length < 3) { setSuggestions([]); setOpen(false); return }
     timerRef.current = setTimeout(async () => {
@@ -54,6 +56,7 @@ function AddressAutocomplete({ value, onChange, onSelect }) {
     onSelect(s)
     setSuggestions([])
     setOpen(false)
+    setImprecise(!s.precise)
   }
 
   return (
@@ -70,10 +73,18 @@ function AddressAutocomplete({ value, onChange, onSelect }) {
         <ul className="address-suggestions">
           {suggestions.map((s, i) => (
             <li key={i} className="address-suggestion-item" onMouseDown={() => handleSelect(s)}>
-              {s.display}
+              <span>{s.display}</span>
+              <span className={`address-suggestion-type ${s.precise ? 'address-suggestion-type--ok' : 'address-suggestion-type--approx'}`}>
+                {s.typeLabel}
+              </span>
             </li>
           ))}
         </ul>
+      )}
+      {imprecise && (
+        <div className="address-imprecise-warn">
+          ⚠️ Numéro de rue introuvable — position approximative à la rue. Vérifiez les coordonnées.
+        </div>
       )}
     </div>
   )
