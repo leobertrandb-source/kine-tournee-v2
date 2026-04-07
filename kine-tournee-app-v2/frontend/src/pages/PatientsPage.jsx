@@ -1,6 +1,6 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api'
-import { geocodeAddress } from '../lib/geocode'
+import { geocodeAddress, autocompleteAddress } from '../lib/geocode'
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
 import { SkeletonPatient } from '../components/Skeleton'
@@ -24,6 +24,59 @@ const EMPTY = {
   prescription_sessions_total: '', prescription_sessions_done: 0,
   session_duration_min: 30, sessions_per_week: 2, is_fixed: false, active: true,
   notes: '', availability: {},
+}
+
+function AddressAutocomplete({ value, onChange, onSelect }) {
+  const [suggestions, setSuggestions] = useState([])
+  const [open, setOpen] = useState(false)
+  const timerRef = useRef(null)
+  const wrapRef = useRef(null)
+
+  useEffect(() => {
+    const onClickOutside = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false) }
+    document.addEventListener('mousedown', onClickOutside)
+    return () => document.removeEventListener('mousedown', onClickOutside)
+  }, [])
+
+  function handleChange(e) {
+    const q = e.target.value
+    onChange(q)
+    clearTimeout(timerRef.current)
+    if (q.length < 3) { setSuggestions([]); setOpen(false); return }
+    timerRef.current = setTimeout(async () => {
+      const results = await autocompleteAddress(q)
+      setSuggestions(results)
+      setOpen(results.length > 0)
+    }, 300)
+  }
+
+  function handleSelect(s) {
+    onSelect(s)
+    setSuggestions([])
+    setOpen(false)
+  }
+
+  return (
+    <div ref={wrapRef} style={{ position: 'relative' }}>
+      <input
+        value={value}
+        onChange={handleChange}
+        onFocus={() => suggestions.length > 0 && setOpen(true)}
+        required
+        placeholder="3 rue de la Paix, 75001 Paris"
+        autoComplete="off"
+      />
+      {open && (
+        <ul className="address-suggestions">
+          {suggestions.map((s, i) => (
+            <li key={i} className="address-suggestion-item" onMouseDown={() => handleSelect(s)}>
+              {s.display}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
 }
 
 function BlockedWindowEditor({ windows, onChange }) {
@@ -272,12 +325,15 @@ export default function PatientsPage({ patients, setPatients }) {
             <input type="email" value={form.email || ''} onChange={(e) => setField('email', e.target.value)} placeholder="patient@email.fr" />
           </label>
           <label>Adresse *
-            <div className="row" style={{ gap: 6 }}>
-              <input value={form.address} onChange={(e) => setField('address', e.target.value)} required style={{ flex: 1 }} />
-              <button type="button" className="secondary small-btn" onClick={handleGeocode} disabled={geocoding || !form.address} title="Géolocaliser automatiquement">
-                {geocoding ? '…' : '📍 Géolocaliser'}
-              </button>
-            </div>
+            <AddressAutocomplete
+              value={form.address}
+              onChange={(address) => setField('address', address)}
+              onSelect={(suggestion) => {
+                setField('address', suggestion.display)
+                setField('lat', suggestion.lat)
+                setField('lng', suggestion.lng)
+              }}
+            />
           </label>
           <div className="grid grid-2">
             <label>Latitude<input value={form.lat} onChange={(e) => setField('lat', e.target.value)} placeholder="48.8566" /></label>

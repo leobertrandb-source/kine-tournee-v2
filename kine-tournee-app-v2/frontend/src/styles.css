@@ -386,6 +386,22 @@ tr:last-child td { border-bottom: none; }
 .patient-card--inactive { opacity: .5; }
 .patient-card-header { display: flex; gap: 12px; align-items: flex-start; }
 
+/* ── Autocomplétion adresse ───────────────────────────────────────────────── */
+.address-suggestions {
+  position: absolute; top: calc(100% + 4px); left: 0; right: 0;
+  background: var(--surface); border: 1.5px solid var(--border);
+  border-radius: var(--radius-sm); box-shadow: var(--shadow-md);
+  z-index: 200; list-style: none; padding: 4px 0; margin: 0;
+  max-height: 220px; overflow-y: auto;
+}
+.address-suggestion-item {
+  padding: 9px 14px; font-size: 13px; cursor: pointer;
+  color: var(--text2); transition: background .1s;
+  border-bottom: 1px solid var(--border);
+}
+.address-suggestion-item:last-child { border-bottom: none; }
+.address-suggestion-item:hover { background: var(--green-light); color: var(--green); }
+
 /* ── Disponibilités ───────────────────────────────────────────────────────── */
 .avail-grid { display: grid; gap: 8px; }
 .avail-day { border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; }
