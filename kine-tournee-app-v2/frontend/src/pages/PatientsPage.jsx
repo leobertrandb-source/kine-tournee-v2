@@ -1,6 +1,7 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState } from 'react'
 import { api } from '../lib/api'
-import { geocodeAddress, autocompleteAddress } from '../lib/geocode'
+import { geocodeAddress } from '../lib/geocode'
+import AddressAutocomplete from '../components/AddressAutocomplete'
 import { useToast } from '../components/Toast'
 import Modal from '../components/Modal'
 import { SkeletonPatient } from '../components/Skeleton'
@@ -24,70 +25,6 @@ const EMPTY = {
   prescription_sessions_total: '', prescription_sessions_done: '',
   session_duration_min: 30, sessions_per_week: 2, is_fixed: false, active: true,
   notes: '', availability: {},
-}
-
-function AddressAutocomplete({ value, onChange, onSelect }) {
-  const [suggestions, setSuggestions] = useState([])
-  const [open, setOpen] = useState(false)
-  const [imprecise, setImprecise] = useState(false)
-  const timerRef = useRef(null)
-  const wrapRef = useRef(null)
-
-  useEffect(() => {
-    const onClickOutside = (e) => { if (wrapRef.current && !wrapRef.current.contains(e.target)) setOpen(false) }
-    document.addEventListener('mousedown', onClickOutside)
-    return () => document.removeEventListener('mousedown', onClickOutside)
-  }, [])
-
-  function handleChange(e) {
-    const q = e.target.value
-    onChange(q)
-    setImprecise(false)
-    clearTimeout(timerRef.current)
-    if (q.length < 3) { setSuggestions([]); setOpen(false); return }
-    timerRef.current = setTimeout(async () => {
-      const results = await autocompleteAddress(q)
-      setSuggestions(results)
-      setOpen(results.length > 0)
-    }, 300)
-  }
-
-  function handleSelect(s) {
-    onSelect(s)
-    setSuggestions([])
-    setOpen(false)
-    setImprecise(!s.precise)
-  }
-
-  return (
-    <div ref={wrapRef} style={{ position: 'relative' }}>
-      <input
-        value={value}
-        onChange={handleChange}
-        onFocus={() => suggestions.length > 0 && setOpen(true)}
-        required
-        placeholder="3 rue de la Paix, 75001 Paris"
-        autoComplete="off"
-      />
-      {open && (
-        <ul className="address-suggestions">
-          {suggestions.map((s, i) => (
-            <li key={i} className="address-suggestion-item" onMouseDown={() => handleSelect(s)}>
-              <span>{s.display}</span>
-              <span className={`address-suggestion-type ${s.precise ? 'address-suggestion-type--ok' : 'address-suggestion-type--approx'}`}>
-                {s.typeLabel}
-              </span>
-            </li>
-          ))}
-        </ul>
-      )}
-      {imprecise && (
-        <div className="address-imprecise-warn">
-          ⚠️ Numéro de rue introuvable — position approximative à la rue. Vérifiez les coordonnées.
-        </div>
-      )}
-    </div>
-  )
 }
 
 function BlockedWindowEditor({ windows, onChange }) {

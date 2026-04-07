@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { api } from '../lib/api'
+import AddressAutocomplete from '../components/AddressAutocomplete'
 
 const DAY_KEYS = ['monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday', 'sunday']
 const DAY_LABELS = {
@@ -111,53 +112,37 @@ export default function SettingsPage({ therapist, setTherapist, weeklyConfig, se
               />
             </label>
             <label>Adresse de départ par défaut
-              <input
+              <AddressAutocomplete
                 value={therapist?.default_start_address || ''}
-                onChange={(e) => setTherapist({ ...therapist, default_start_address: e.target.value })}
+                onChange={(v) => setTherapist({ ...therapist, default_start_address: v })}
+                onSelect={(s) => setTherapist({ ...therapist, default_start_address: s.display, default_start_lat: s.lat, default_start_lng: s.lng })}
+                placeholder="Votre cabinet, domicile…"
               />
             </label>
             <div className="grid grid-2">
               <label>Lat départ
-                <input
-                  type="number" step="any"
-                  value={therapist?.default_start_lat || ''}
-                  onChange={(e) => setTherapist({ ...therapist, default_start_lat: Number(e.target.value) })}
-                  placeholder="48.8566"
-                />
+                <input type="number" step="any" value={therapist?.default_start_lat || ''} onChange={(e) => setTherapist({ ...therapist, default_start_lat: Number(e.target.value) })} placeholder="48.8566" />
               </label>
               <label>Lng départ
-                <input
-                  type="number" step="any"
-                  value={therapist?.default_start_lng || ''}
-                  onChange={(e) => setTherapist({ ...therapist, default_start_lng: Number(e.target.value) })}
-                  placeholder="2.3522"
-                />
+                <input type="number" step="any" value={therapist?.default_start_lng || ''} onChange={(e) => setTherapist({ ...therapist, default_start_lng: Number(e.target.value) })} placeholder="2.3522" />
               </label>
             </div>
           </div>
           <div className="grid">
             <label>Adresse d'arrivée par défaut
-              <input
+              <AddressAutocomplete
                 value={therapist?.default_end_address || ''}
-                onChange={(e) => setTherapist({ ...therapist, default_end_address: e.target.value })}
+                onChange={(v) => setTherapist({ ...therapist, default_end_address: v })}
+                onSelect={(s) => setTherapist({ ...therapist, default_end_address: s.display, default_end_lat: s.lat, default_end_lng: s.lng })}
+                placeholder="Votre cabinet, domicile…"
               />
             </label>
             <div className="grid grid-2">
               <label>Lat arrivée
-                <input
-                  type="number" step="any"
-                  value={therapist?.default_end_lat || ''}
-                  onChange={(e) => setTherapist({ ...therapist, default_end_lat: Number(e.target.value) })}
-                  placeholder="48.8566"
-                />
+                <input type="number" step="any" value={therapist?.default_end_lat || ''} onChange={(e) => setTherapist({ ...therapist, default_end_lat: Number(e.target.value) })} placeholder="48.8566" />
               </label>
               <label>Lng arrivée
-                <input
-                  type="number" step="any"
-                  value={therapist?.default_end_lng || ''}
-                  onChange={(e) => setTherapist({ ...therapist, default_end_lng: Number(e.target.value) })}
-                  placeholder="2.3522"
-                />
+                <input type="number" step="any" value={therapist?.default_end_lng || ''} onChange={(e) => setTherapist({ ...therapist, default_end_lng: Number(e.target.value) })} placeholder="2.3522" />
               </label>
             </div>
             <div className="grid grid-2">
@@ -255,17 +240,19 @@ export default function SettingsPage({ therapist, setTherapist, weeklyConfig, se
                 </div>
                 <div className="grid">
                   <label>Adresse de départ spécifique
-                    <input
+                    <AddressAutocomplete
                       value={row.start_address || ''}
                       placeholder="Par défaut : adresse du profil"
-                      onChange={(e) => updateDay(dayKey, { start_address: e.target.value })}
+                      onChange={(v) => updateDay(dayKey, { start_address: v })}
+                      onSelect={(s) => updateDay(dayKey, { start_address: s.display, start_lat: s.lat, start_lng: s.lng })}
                     />
                   </label>
                   <label>Adresse d'arrivée spécifique
-                    <input
+                    <AddressAutocomplete
                       value={row.end_address || ''}
                       placeholder="Par défaut : adresse du profil"
-                      onChange={(e) => updateDay(dayKey, { end_address: e.target.value })}
+                      onChange={(v) => updateDay(dayKey, { end_address: v })}
+                      onSelect={(s) => updateDay(dayKey, { end_address: s.display, end_lat: s.lat, end_lng: s.lng })}
                     />
                   </label>
                 </div>
