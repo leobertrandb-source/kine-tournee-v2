@@ -19,72 +19,62 @@ function Avatar({ name, size = 40 }) {
   return <div className="avatar" style={{ width: size, height: size, background: getColor(name), fontSize: size * 0.38 }}>{initials}</div>
 }
 
-function makeDefaultAvailability() {
-  return Object.fromEntries(DAY_KEYS.map((d) => [d, {
-    unavailable: d === 'saturday' || d === 'sunday',
-    available_windows: [], blocked_windows: [],
-  }]))
-}
-
 const EMPTY = {
   full_name: '', address: '', lat: '', lng: '', phone: '', email: '', doctor_name: '',
   prescription_sessions_total: '', prescription_sessions_done: 0,
   session_duration_min: 30, sessions_per_week: 2, is_fixed: false, active: true,
-  notes: '', availability: makeDefaultAvailability(),
+  notes: '', availability: {},
 }
 
-function TimeWindowEditor({ windows, onChange, colorClass }) {
+function BlockedWindowEditor({ windows, onChange }) {
   const [ns, setNs] = useState('08:00')
   const [ne, setNe] = useState('12:00')
   return (
     <div className="time-windows">
       <div className="time-windows-list">
         {(windows ?? []).map((w, i) => (
-          <span key={i} className={`time-badge ${colorClass}`}>
+          <span key={i} className="time-badge badge-red">
             {w.start_time}–{w.end_time}
             <button className="badge-remove" onClick={() => onChange(windows.filter((_, idx) => idx !== i))}>×</button>
           </span>
         ))}
-        {(!windows || windows.length === 0) && <span className="small muted">Aucune</span>}
+        {(!windows || windows.length === 0) && <span className="small muted">Aucune plage exclue</span>}
       </div>
       <div className="time-window-add">
         <input type="time" value={ns} onChange={(e) => setNs(e.target.value)} />
         <span className="small">→</span>
         <input type="time" value={ne} onChange={(e) => setNe(e.target.value)} />
-        <button className="secondary small-btn" onClick={() => { if (ns < ne) onChange([...(windows ?? []), { start_time: ns, end_time: ne }]) }}>+ Ajouter</button>
+        <button className="secondary small-btn" onClick={() => { if (ns < ne) onChange([...(windows ?? []), { start_time: ns, end_time: ne }]) }}>+ Exclure</button>
       </div>
     </div>
   )
 }
 
-function AvailabilityEditor({ availability, onChange }) {
+// Indisponibilités patient : par défaut tout est dispo (= horaires du kiné)
+// On définit uniquement les jours / plages où le patient n'est PAS joignable
+function UnavailabilityEditor({ availability, onChange }) {
   return (
     <div className="avail-grid">
       {DAY_KEYS.map((d) => {
-        const day = availability[d] ?? { unavailable: false, available_windows: [], blocked_windows: [] }
+        const day = availability[d] ?? { unavailable: false, blocked_windows: [] }
         return (
           <div key={d} className={`avail-day ${day.unavailable ? 'avail-day--off' : ''}`}>
             <div className="avail-day-header">
               <strong>{DAY_LABELS[d]}</strong>
               <label className="avail-toggle">
-                <input type="checkbox" checked={!day.unavailable}
-                  onChange={(e) => onChange({ ...availability, [d]: { ...day, unavailable: !e.target.checked } })} />
-                Disponible
+                <input type="checkbox" checked={!!day.unavailable}
+                  onChange={(e) => onChange({ ...availability, [d]: { ...day, unavailable: e.target.checked } })} />
+                Indisponible ce jour
               </label>
             </div>
             {!day.unavailable && (
-              <>
-                <div className="avail-section">
-                  <div className="small avail-label avail-label--green">Créneaux disponibles</div>
-                  <TimeWindowEditor windows={day.available_windows ?? []} colorClass="badge-green"
-                    onChange={(w) => onChange({ ...availability, [d]: { ...day, available_windows: w } })} />
-                </div>
-                <div className="avail-section">
-                  <div className="small avail-label avail-label--red">Créneaux bloqués</div>
-                  <TimeWindowEditor windows={day.blocked_windows ?? []} colorClass="badge-red"
-                    onChange={(w) => onChange({ ...availability, [d]: { ...day, blocked_windows: w } })} />
-                </div>
-              </>
+              <div className="avail-section">
+                <div className="small avail-label avail-label--red">Plages horaires exclues</div>
+                <BlockedWindowEditor
+                  windows={day.blocked_windows ?? []}
+                  onChange={(w) => onChange({ ...availability, [d]: { ...day, blocked_windows: w } })}
+                />
+              </div>
             )}
           </div>
         )
@@ -189,7 +179,7 @@ export default function PatientsPage({ patients, setPatients }) {
 
   async function startEdit(patient) {
     setEditingId(patient.id)
-    setForm({ ...EMPTY, ...patient, lat: patient.lat ?? '', lng: patient.lng ?? '', availability: patient.availability ?? makeDefaultAvailability() })
+    setForm({ ...EMPTY, ...patient, lat: patient.lat ?? '', lng: patient.lng ?? '', availability: patient.availability ?? {} })
     setShowAvail(false)
     try { setAbsences(await api.getPatientAbsences(patient.id)) } catch { setAbsences([]) }
     window.scrollTo({ top: 0, behavior: 'smooth' })
@@ -310,9 +300,9 @@ export default function PatientsPage({ patients, setPatients }) {
           </div>
           <label>Notes<textarea value={form.notes} onChange={(e) => setField('notes', e.target.value)} rows={2} placeholder="Pathologie, accès, code porte…" /></label>
           <button type="button" className="secondary" onClick={() => setShowAvail((v) => !v)} style={{ width: '100%' }}>
-            {showAvail ? '▲ Masquer disponibilités' : '▼ Disponibilités par jour'}
+            {showAvail ? '▲ Masquer indisponibilités' : '▼ Indisponibilités du patient'}
           </button>
-          {showAvail && <AvailabilityEditor availability={form.availability} onChange={(a) => setField('availability', a)} />}
+          {showAvail && <UnavailabilityEditor availability={form.availability} onChange={(a) => setField('availability', a)} />}
           {editingId && <AbsenceManager patientId={editingId} absences={absences} setAbsences={setAbsences} />}
           <button className="primary" disabled={saving}>{saving ? 'Enregistrement…' : editingId ? 'Mettre à jour' : 'Ajouter le patient'}</button>
         </form>

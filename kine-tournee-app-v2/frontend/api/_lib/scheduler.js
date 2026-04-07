@@ -221,6 +221,7 @@ export async function generateSchedule({
         if (absentSet.has(`${p.id}|${day.date}`)) return false
 
         const patientDay = (p.availability ?? {})[day.key] ?? {}
+        // Jour entier marqué indisponible pour ce patient
         if (patientDay.unavailable === true) return false
 
         const { minutes: travelMin } = travel(currentLat, currentLng, p.lat, p.lng)
@@ -229,13 +230,12 @@ export async function generateSchedule({
         const startVisit = currentTime + travelWithBuffer
         const endVisit = startVisit + duration
 
+        // La disponibilité patient = horaires du kiné (dayStart → dayEnd)
         if (endVisit > dayEnd) return false
         if (isInsideBlocked(startVisit, endVisit, therapistBlocked)) return false
 
-        const patientAvailable = normalizeWindows(patientDay.available_windows)
+        // Plages horaires exclues pour ce patient ce jour
         const patientBlocked = normalizeWindows(patientDay.blocked_windows)
-
-        if (!isInsideAvailable(startVisit, endVisit, patientAvailable)) return false
         if (isInsideBlocked(startVisit, endVisit, patientBlocked)) return false
 
         return true
