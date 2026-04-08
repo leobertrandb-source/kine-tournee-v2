@@ -17,10 +17,14 @@ const DAY_LABELS = {
 function BlockedWindowsEditor({ windows, onChange }) {
   const [newStart, setNewStart] = useState('12:30')
   const [newEnd, setNewEnd] = useState('13:30')
+  const [newLieu, setNewLieu] = useState('')
 
   function add() {
     if (newStart >= newEnd) return
-    onChange([...(windows ?? []), { start_time: newStart, end_time: newEnd }])
+    const entry = { start_time: newStart, end_time: newEnd }
+    if (newLieu.trim()) entry.lieu = newLieu.trim()
+    onChange([...(windows ?? []), entry])
+    setNewLieu('')
   }
   function remove(i) {
     onChange((windows ?? []).filter((_, idx) => idx !== i))
@@ -34,7 +38,7 @@ function BlockedWindowsEditor({ windows, onChange }) {
       <div className="time-windows-list" style={{ marginBottom: 8 }}>
         {(windows ?? []).map((w, i) => (
           <span key={i} className="time-badge badge-red">
-            {w.start_time}–{w.end_time}
+            {w.start_time}–{w.end_time}{w.lieu ? ` · ${w.lieu}` : ''}
             <button className="badge-remove" onClick={() => remove(i)}>×</button>
           </span>
         ))}
@@ -46,6 +50,12 @@ function BlockedWindowsEditor({ windows, onChange }) {
         <input type="time" value={newStart} onChange={(e) => setNewStart(e.target.value)} />
         <span className="small">→</span>
         <input type="time" value={newEnd} onChange={(e) => setNewEnd(e.target.value)} />
+        <input
+          value={newLieu}
+          onChange={(e) => setNewLieu(e.target.value)}
+          placeholder="Lieu (optionnel)"
+          style={{ flex: 1 }}
+        />
         <button className="secondary small-btn" onClick={add}>+ Ajouter</button>
       </div>
     </div>
@@ -119,14 +129,6 @@ export default function SettingsPage({ therapist, setTherapist, weeklyConfig, se
                 placeholder="Votre cabinet, domicile…"
               />
             </label>
-            <div className="grid grid-2">
-              <label>Lat départ
-                <input type="number" step="any" value={therapist?.default_start_lat || ''} onChange={(e) => setTherapist({ ...therapist, default_start_lat: Number(e.target.value) })} placeholder="48.8566" />
-              </label>
-              <label>Lng départ
-                <input type="number" step="any" value={therapist?.default_start_lng || ''} onChange={(e) => setTherapist({ ...therapist, default_start_lng: Number(e.target.value) })} placeholder="2.3522" />
-              </label>
-            </div>
           </div>
           <div className="grid">
             <label>Adresse d'arrivée par défaut
@@ -137,14 +139,6 @@ export default function SettingsPage({ therapist, setTherapist, weeklyConfig, se
                 placeholder="Votre cabinet, domicile…"
               />
             </label>
-            <div className="grid grid-2">
-              <label>Lat arrivée
-                <input type="number" step="any" value={therapist?.default_end_lat || ''} onChange={(e) => setTherapist({ ...therapist, default_end_lat: Number(e.target.value) })} placeholder="48.8566" />
-              </label>
-              <label>Lng arrivée
-                <input type="number" step="any" value={therapist?.default_end_lng || ''} onChange={(e) => setTherapist({ ...therapist, default_end_lng: Number(e.target.value) })} placeholder="2.3522" />
-              </label>
-            </div>
             <div className="grid grid-2">
               <label>Buffer trajet (min)
                 <input

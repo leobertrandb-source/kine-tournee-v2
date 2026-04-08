@@ -21,8 +21,8 @@ function Avatar({ name, size = 40 }) {
 }
 
 const EMPTY = {
-  full_name: '', address: '', lat: '', lng: '', phone: '', email: '', doctor_name: '',
-  prescription_sessions_total: '', prescription_sessions_done: '',
+  full_name: '', address: '', lat: '', lng: '', phone: '', email: '',
+  sms_first_name: '', tournee: '',
   session_duration_min: 30, sessions_per_week: 2, is_fixed: false, active: true,
   notes: '', availability: {},
 }
@@ -203,11 +203,9 @@ export default function PatientsPage({ patients, setPatients }) {
         else toast.warning('Adresse introuvable — le patient sera ajouté sans coordonnées GPS')
       }
 
-      const payload = {
-        ...form, lat, lng,
-        prescription_sessions_total: form.prescription_sessions_total === '' ? null : Number(form.prescription_sessions_total),
-        prescription_sessions_done: Number(form.prescription_sessions_done || 0),
-      }
+      // eslint-disable-next-line no-unused-vars
+      const { doctor_name, prescription_sessions_total, prescription_sessions_done, lat: _lat, lng: _lng, ...restForm } = form
+      const payload = { ...restForm, lat, lng }
       if (editingId) {
         const updated = await api.updatePatient(editingId, payload)
         setPatients((prev) => prev.map((p) => p.id === editingId ? updated : p))
@@ -245,13 +243,6 @@ export default function PatientsPage({ patients, setPatients }) {
     (p.address || '').toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  const prescriptionAlert = (p) => {
-    if (!p.prescription_sessions_total) return null
-    const remaining = p.prescription_sessions_total - (p.prescription_sessions_done ?? 0)
-    if (remaining <= 3) return remaining <= 0 ? 'épuisé' : `⚠ ${remaining} restante(s)`
-    return null
-  }
-
   return (
     <div className="grid grid-2" style={{ alignItems: 'start' }}>
       <Modal open={!!deleteModal} title="Supprimer le patient" danger
@@ -267,11 +258,16 @@ export default function PatientsPage({ patients, setPatients }) {
         <form className="grid" onSubmit={handleSave}>
           <div className="grid grid-2">
             <label>Nom complet *<input value={form.full_name} onChange={(e) => setField('full_name', e.target.value)} required /></label>
-            <label>Téléphone<input value={form.phone} onChange={(e) => setField('phone', e.target.value)} placeholder="06 XX XX XX XX" /></label>
+            <label>Prénom SMS <span className="small muted">(pour les notifications)</span>
+              <input value={form.sms_first_name || ''} onChange={(e) => setField('sms_first_name', e.target.value)} placeholder="Prénom utilisé dans les SMS/WhatsApp" />
+            </label>
           </div>
-          <label>Email (pour les notifications)
-            <input type="email" value={form.email || ''} onChange={(e) => setField('email', e.target.value)} placeholder="patient@email.fr" />
-          </label>
+          <div className="grid grid-2">
+            <label>Téléphone<input value={form.phone} onChange={(e) => setField('phone', e.target.value)} placeholder="06 XX XX XX XX" /></label>
+            <label>Email (pour les notifications)
+              <input type="email" value={form.email || ''} onChange={(e) => setField('email', e.target.value)} placeholder="patient@email.fr" />
+            </label>
+          </div>
           <label>Adresse *
             <AddressAutocomplete
               value={form.address}
@@ -283,17 +279,13 @@ export default function PatientsPage({ patients, setPatients }) {
               }}
             />
           </label>
-          <div className="grid grid-2">
-            <label>Latitude<input value={form.lat} onChange={(e) => setField('lat', e.target.value)} placeholder="48.8566" /></label>
-            <label>Longitude<input value={form.lng} onChange={(e) => setField('lng', e.target.value)} placeholder="2.3522" /></label>
-          </div>
-          <div className="grid grid-2">
-            <label>Médecin prescripteur<input value={form.doctor_name} onChange={(e) => setField('doctor_name', e.target.value)} /></label>
-            <label>Séances prescrites<input type="number" min="0" value={form.prescription_sessions_total} onChange={(e) => setField('prescription_sessions_total', e.target.value)} placeholder="ex: 30" /></label>
-          </div>
-          {editingId && (
-            <label>Séances effectuées<input type="number" min="0" value={form.prescription_sessions_done} onChange={(e) => setField('prescription_sessions_done', e.target.value)} /></label>
-          )}
+          <label>Tournée
+            <select value={form.tournee || ''} onChange={(e) => setField('tournee', e.target.value)}>
+              <option value="">Automatique</option>
+              <option value="A">Tournée A (Lun + Mer)</option>
+              <option value="B">Tournée B (Mar + Jeu)</option>
+            </select>
+          </label>
           <div className="grid grid-2">
             <label>Durée séance (min)<input type="number" min="5" max="120" value={form.session_duration_min} onChange={(e) => setField('session_duration_min', Number(e.target.value))} /></label>
             <label>Séances / semaine<input type="number" min="1" max="14" value={form.sessions_per_week} onChange={(e) => setField('sessions_per_week', Number(e.target.value))} /></label>
@@ -325,7 +317,6 @@ export default function PatientsPage({ patients, setPatients }) {
         </div>
         <div className="patient-list">
           {filtered.map((p) => {
-            const alert = prescriptionAlert(p)
             return (
               <div key={p.id} className={`patient-card ${editingId === p.id ? 'patient-card--editing' : ''} ${!p.active ? 'patient-card--inactive' : ''}`}>
                 <div className="patient-card-header">
@@ -333,17 +324,14 @@ export default function PatientsPage({ patients, setPatients }) {
                   <div style={{ flex: 1 }}>
                     <div className="row" style={{ gap: 6 }}>
                       <strong>{p.full_name}</strong>
+                      {p.tournee && <span className="badge badge-xs" style={{ background: p.tournee === 'A' ? '#dbeafe' : '#fce7f3', color: p.tournee === 'A' ? '#1d4ed8' : '#be185d' }}>T.{p.tournee}</span>}
                       {p.is_fixed && <span className="badge badge-fixed badge-xs">Fixe</span>}
                       {!p.active && <span className="badge badge-inactive badge-xs">Inactif</span>}
-                      {alert && <span className={`badge badge-xs ${alert === 'épuisé' ? 'badge-red' : 'badge-orange'}`}>{alert}</span>}
                       {(!p.lat || !p.lng) && <span className="badge badge-xs badge-orange" title="Pas de coordonnées GPS — invisible sur la carte">📍 sans GPS</span>}
                     </div>
                     <div className="small muted">{p.address}</div>
                     {p.phone && <div className="small muted">{p.phone}</div>}
-                    {p.doctor_name && <div className="small muted">Dr {p.doctor_name}</div>}
-                    <div className="small muted">{p.sessions_per_week}×/semaine · {p.session_duration_min} min
-                      {p.prescription_sessions_total ? ` · ${p.prescription_sessions_done ?? 0}/${p.prescription_sessions_total} séances` : ''}
-                    </div>
+                    <div className="small muted">{p.sessions_per_week}×/semaine · {p.session_duration_min} min</div>
                   </div>
                   <div className="row" style={{ gap: 4, flexShrink: 0 }}>
                     <button className="secondary small-btn" onClick={() => startEdit(p)} title="Modifier">✏</button>
