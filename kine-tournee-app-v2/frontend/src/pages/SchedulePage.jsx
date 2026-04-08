@@ -220,6 +220,30 @@ function DayStats({ stats }) {
   )
 }
 
+// ── Notifications push système ────────────────────────────────────────────────
+function notifSupported() { return 'Notification' in window }
+function notifGranted() { return notifSupported() && Notification.permission === 'granted' }
+
+async function requestNotifPermission() {
+  if (!notifSupported()) return false
+  if (Notification.permission === 'granted') return true
+  const result = await Notification.requestPermission()
+  return result === 'granted'
+}
+
+// Envoyer une notification système (remplace la précédente via tag unique)
+function sendDelayNotif(delayMin) {
+  if (!notifGranted()) return
+  const isRetard = delayMin > 0
+  new Notification(isRetard ? '⚠ Retard tournée' : '✅ Avance tournée', {
+    body: isRetard
+      ? `Retard estimé : ${delayMin} min — prévenez vos prochains patients.`
+      : `Avance estimée : ${Math.abs(delayMin)} min — vous pouvez prévenir la suite.`,
+    tag: 'tournee-timing', // remplace la notif précédente, pas de spam
+    silent: false,
+  })
+}
+
 // ── Calcul avance/retard par rapport au planning ───────────────────────────────
 // Retourne le delta en minutes (>0 = retard, <0 = avance) ou null si non applicable
 function computeDelayMin(visits, completions, date) {
@@ -353,6 +377,7 @@ export default function SchedulePage({ schedule, setSchedule, weekStart, setWeek
   const [viewMode, setViewMode] = useState('table') // 'table' | 'timeline'
   const [userPosition, setUserPosition] = useState(null)
   const [showNotify, setShowNotify] = useState(false)
+  const [notifEnabled, setNotifEnabled] = useState(notifGranted)
 
   useEffect(() => {
     if (!schedule?.week_start) return
@@ -368,9 +393,17 @@ export default function SchedulePage({ schedule, setSchedule, weekStart, setWeek
     const key = `${patientId}|${visitDate}`
     try {
       const updated = await api.upsertCompletion({ patient_id: patientId, visit_date: visitDate, done })
-      setCompletions((prev) => ({ ...prev, [key]: updated }))
+      const newCompletions = { ...completions, [key]: updated }
+      setCompletions(newCompletions)
       if (done) toast.success('Séance validée ✓')
       else toast.info('Séance remise en attente')
+
+      // Notification push système
+      const day = schedule?.days?.find((d) => d.date === visitDate)
+      if (day) {
+        const delayMin = computeDelayMin(day.visits, newCompletions, visitDate)
+        if (delayMin !== null && Math.abs(delayMin) >= 5) sendDelayNotif(delayMin)
+      }
     } catch { toast.error('Erreur lors de la mise à jour') }
   }
 
@@ -440,6 +473,20 @@ export default function SchedulePage({ schedule, setSchedule, weekStart, setWeek
               <button className="secondary small-btn" onClick={handleSaveManual} disabled={saving}>{saving ? '…' : '💾 Sauvegarder'}</button>
               <button className="secondary small-btn" onClick={handleCopyWeek} title="Générer la semaine suivante">⏭ Semaine +1</button>
               <button className="secondary small-btn" onClick={handleLocate} title="Ma position">📍 Me localiser</button>
+              {notifSupported() && (
+                <button
+                  className="secondary small-btn"
+                  title={notifEnabled ? 'Notifications push activées' : 'Activer les notifications push retard/avance'}
+                  onClick={async () => {
+                    const granted = await requestNotifPermission()
+                    setNotifEnabled(granted)
+                    if (granted) toast.success('Notifications push activées ✓')
+                    else toast.warning('Notifications refusées par le navigateur')
+                  }}
+                >
+                  {notifEnabled ? '🔔' : '🔕 Notifs'}
+                </button>
+              )}
               <button className="btn-notify" onClick={() => setShowNotify(true)} title="Envoyer les horaires aux patients">📱 Notifier</button>
               <div className="view-toggle">
                 <button className={viewMode === 'table' ? 'active' : ''} onClick={() => setViewMode('table')}>≡ Liste</button>

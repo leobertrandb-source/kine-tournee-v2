@@ -91,6 +91,61 @@ const TOURNEE_A = ['monday', 'wednesday']
 const TOURNEE_B = ['tuesday', 'thursday']
 
 /**
+ * Clustering k-means géographique à 2 zones.
+ * Initialise les centroides sur les adresses de départ des tournées A et B,
+ * puis itère jusqu'à convergence pour obtenir des zones cohérentes sans
+ * traversée inutile de secteurs.
+ *
+ * @param   patients  - patients avec lat/lng
+ * @param   centerA   - {lat, lng} départ tournée A (lundi)
+ * @param   centerB   - {lat, lng} départ tournée B (mardi)
+ * @returns Map<patientId, 0|1>  — 0 = zone A, 1 = zone B
+ */
+function kmeansZones(patients, centerA, centerB, maxIter = 10) {
+  const pts = patients.filter((p) => p.lat && p.lng)
+  if (!pts.length) return new Map()
+
+  let centers = [
+    { lat: centerA.lat, lng: centerA.lng },
+    { lat: centerB.lat, lng: centerB.lng },
+  ]
+  let assignments = new Map()
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    const clusters = [[], []]
+    const next = new Map()
+
+    for (const p of pts) {
+      const dA = euclideanKm(p.lat, p.lng, centers[0].lat, centers[0].lng)
+      const dB = euclideanKm(p.lat, p.lng, centers[1].lat, centers[1].lng)
+      const zone = dA <= dB ? 0 : 1
+      next.set(p.id, zone)
+      clusters[zone].push(p)
+    }
+
+    // Convergence ?
+    let changed = false
+    for (const [id, zone] of next) {
+      if (assignments.get(id) !== zone) { changed = true; break }
+    }
+    assignments = next
+    if (!changed) break
+
+    // Recalculer les centroides (conserver l'ancien si cluster vide)
+    for (let i = 0; i < 2; i++) {
+      if (clusters[i].length > 0) {
+        centers[i] = {
+          lat: clusters[i].reduce((s, p) => s + p.lat, 0) / clusters[i].length,
+          lng: clusters[i].reduce((s, p) => s + p.lng, 0) / clusters[i].length,
+        }
+      }
+    }
+  }
+
+  return assignments
+}
+
+/**
  * Pré-assigne chaque patient à des jours spécifiques de la semaine.
  *
  * Règles :
@@ -113,6 +168,12 @@ function preAssignDays(patients, enabledDays, absentSet, startLocByDay = {}) {
     (aLoc.lat !== bLoc.lat || aLoc.lng !== bLoc.lng)
   )
 
+  // Pré-calculer les zones k-means pour les patients auto 2x/sem avec coordonnées
+  const autoPatients2x = patients.filter(
+    (p) => p.active && !p.tournee && Number(p.sessions_per_week ?? 1) === 2 && p.lat && p.lng
+  )
+  const zoneMap = geoAvailable ? kmeansZones(autoPatients2x, aLoc, bLoc) : new Map()
+
   for (const patient of patients) {
     if (!patient.active) { assignments.set(patient.id, []); continue }
 
@@ -133,12 +194,11 @@ function preAssignDays(patients, enabledDays, absentSet, startLocByDay = {}) {
     } else if (patient.tournee === 'B') {
       preferred = TOURNEE_B
     } else if (n === 2) {
-      if (geoAvailable && patient.lat && patient.lng) {
-        // Assignation géographique : tournée dont le départ est le plus proche du patient
-        const distA = euclideanKm(patient.lat, patient.lng, aLoc.lat, aLoc.lng)
-        const distB = euclideanKm(patient.lat, patient.lng, bLoc.lat, bLoc.lng)
-        preferred = distA <= distB ? TOURNEE_A : TOURNEE_B
+      if (zoneMap.has(patient.id)) {
+        // Zone k-means : assignation géographique convergée
+        preferred = zoneMap.get(patient.id) === 0 ? TOURNEE_A : TOURNEE_B
       } else {
+        // Fallback (pas de coords) : round-robin équilibré
         preferred = autoTourneeCounter % 2 === 0 ? TOURNEE_A : TOURNEE_B
         autoTourneeCounter++
       }
