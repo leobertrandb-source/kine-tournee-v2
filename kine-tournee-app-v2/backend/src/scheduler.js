@@ -8,6 +8,10 @@ const DAY_KEYS = [
   'sunday',
 ]
 
+// Jours des deux tournées fixes
+const TOURNEE_A = ['monday', 'wednesday']
+const TOURNEE_B = ['tuesday', 'thursday']
+
 function parseMinutes(value) {
   if (!value) return null
   const [h, m] = value.split(':').map(Number)
@@ -49,15 +53,8 @@ function euclideanKm(fromLat, fromLng, toLat, toLng) {
 }
 
 // ── Matrice OSRM ────────────────────────────────────────────────────────────────
-/**
- * Calcule la matrice de durées (minutes) et distances (km) via l'API publique OSRM.
- * Retourne null si OSRM est inaccessible.
- * @param {Array<{lat: number, lng: number}>} locations
- * @returns {Promise<{durations: number[][], distances: number[][]} | null>}
- */
 async function buildOSRMMatrix(locations) {
   if (!locations.length) return null
-  // Déduplique les coordonnates
   const coords = locations.map((l) => `${l.lng},${l.lat}`).join(';')
   const url = `https://router.project-osrm.org/table/v1/driving/${coords}?annotations=duration,distance`
   try {
@@ -65,7 +62,6 @@ async function buildOSRMMatrix(locations) {
     if (!res.ok) return null
     const data = await res.json()
     if (data.code !== 'Ok') return null
-    // durations en secondes -> minutes, distances en mètres -> km
     const durations = data.durations.map((row) =>
       row.map((v) => (v === null ? null : Math.max(1, Math.round(v / 60))))
     )
@@ -78,11 +74,7 @@ async function buildOSRMMatrix(locations) {
   }
 }
 
-/**
- * Crée une fonction de trajet à partir de la matrice OSRM (ou fallback Euclidien).
- */
 function createTravelFn(matrix, locations) {
-  // Crée un index positionnel par clé "lat,lng"
   const idx = new Map(locations.map((l, i) => [`${l.lat},${l.lng}`, i]))
 
   return function travelFn(fromLat, fromLng, toLat, toLng) {
@@ -117,9 +109,74 @@ function isInsideBlocked(timeStart, timeEnd, blockedWindows) {
   return blockedWindows.some((b) => !(timeEnd <= b.start || timeStart >= b.end))
 }
 
-function isInsideAvailable(timeStart, timeEnd, availableWindows) {
-  if (!availableWindows.length) return true
-  return availableWindows.some((w) => timeStart >= w.start && timeEnd <= w.end)
+/**
+ * Pré-assigne chaque patient à des jours spécifiques de la semaine.
+ *
+ * Règles :
+ *  - Respecte sessions_per_week avec écart ≥ 2 jours
+ *  - Tournée explicite (patient.tournee = 'A' ou 'B') : préfère Lun+Mer ou Mar+Jeu
+ *  - Tournée automatique (2x/sem) : équilibre entre A et B en alternant
+ *  - 3x/sem : Lun+Mer+Ven de préférence
+ */
+function preAssignDays(patients, enabledDays, absentSet) {
+  const assignments = new Map()
+  let autoTourneeCounter = 0
+
+  for (const patient of patients) {
+    if (!patient.active) { assignments.set(patient.id, []); continue }
+
+    const n = Math.max(0, Number(patient.sessions_per_week ?? 1))
+    if (n === 0) { assignments.set(patient.id, []); continue }
+
+    const availableDays = enabledDays.filter((day) => {
+      if (absentSet.has(`${patient.id}|${day.date}`)) return false
+      const dayAvail = (patient.availability ?? {})[day.key] ?? {}
+      if (dayAvail.unavailable === true) return false
+      return true
+    })
+
+    if (!availableDays.length) { assignments.set(patient.id, []); continue }
+
+    // Déterminer la tournée préférée
+    let preferred = null
+    if (patient.tournee === 'A') {
+      preferred = TOURNEE_A
+    } else if (patient.tournee === 'B') {
+      preferred = TOURNEE_B
+    } else if (n === 2) {
+      preferred = autoTourneeCounter % 2 === 0 ? TOURNEE_A : TOURNEE_B
+      autoTourneeCounter++
+    }
+
+    const sortedDays = preferred
+      ? [...availableDays].sort((a, b) => {
+          const aP = preferred.includes(a.key) ? 0 : 1
+          const bP = preferred.includes(b.key) ? 0 : 1
+          return aP - bP || a.dow - b.dow
+        })
+      : availableDays
+
+    function pickWithGap(remaining, minDow, chosen) {
+      if (remaining === 0) return chosen
+      for (const day of sortedDays) {
+        if (day.dow >= minDow) {
+          const result = pickWithGap(remaining - 1, day.dow + 2, [...chosen, day.key])
+          if (result) return result
+        }
+      }
+      return null
+    }
+
+    let picked = pickWithGap(n, 1, [])
+    if (!picked) {
+      picked = pickWithGap(Math.min(n, sortedDays.length), 1, [])
+        ?? sortedDays.slice(0, n).map((d) => d.key)
+    }
+
+    assignments.set(patient.id, picked)
+  }
+
+  return assignments
 }
 
 /**
@@ -142,6 +199,7 @@ export async function generateSchedule({
   absentSet = new Set(),
 }) {
   const days = getDayDates(weekStart)
+  const enabledDays = days.filter((d) => weeklyConfig[d.key]?.enabled)
 
   // ── Construire la matrice OSRM ──────────────────────────────────────────────
   const allLocations = []
@@ -152,14 +210,12 @@ export async function generateSchedule({
     }
   }
 
-  // Positions thérapeute
   days.forEach((day) => {
     const cfg = weeklyConfig[day.key]
     if (!cfg?.enabled) return
     addLoc(cfg.start_lat ?? therapist?.default_start_lat, cfg.start_lng ?? therapist?.default_start_lng)
     addLoc(cfg.end_lat ?? therapist?.default_end_lat, cfg.end_lng ?? therapist?.default_end_lng)
   })
-  // Positions patients
   patients.forEach((p) => addLoc(p.lat, p.lng))
 
   let matrix = null
@@ -173,11 +229,19 @@ export async function generateSchedule({
   const travel = createTravelFn(matrix, allLocations)
   const routingSource = matrix ? 'osrm' : 'euclidean'
 
-  // ── Génération jour par jour ────────────────────────────────────────────────
-  const remainingVisits = new Map(
-    patients.map((p) => [p.id, Math.max(0, Number(p.sessions_per_week ?? 0))])
-  )
+  // ── Pré-assignation des patients aux jours (règle 48h + tournées) ───────────
+  const dayAssignments = preAssignDays(patients, enabledDays, absentSet)
 
+  // Index inverse : dayKey → [patients assignés ce jour]
+  const patientsByDay = new Map(days.map((d) => [d.key, []]))
+  for (const patient of patients) {
+    const assignedDays = dayAssignments.get(patient.id) ?? []
+    for (const dayKey of assignedDays) {
+      patientsByDay.get(dayKey)?.push(patient)
+    }
+  }
+
+  // ── Génération jour par jour ────────────────────────────────────────────────
   const result = []
 
   for (const day of days) {
@@ -205,37 +269,28 @@ export async function generateSchedule({
     const visits = []
     const maxVisits = Number(dayConfig.max_visits ?? 20)
 
-    // Trier : patients fixes (is_fixed) en priorité
-    const sortedPatients = [...patients].sort((a, b) => {
+    // Patients assignés à ce jour, fixes en premier
+    const todayPatients = (patientsByDay.get(day.key) ?? []).sort((a, b) => {
       if (a.is_fixed && !b.is_fixed) return -1
       if (!a.is_fixed && b.is_fixed) return 1
       return 0
     })
 
-    for (let i = 0; i < maxVisits; i += 1) {
-      const candidates = sortedPatients.filter((p) => {
-        const remaining = remainingVisits.get(p.id) ?? 0
-        if (!p.active || remaining <= 0) return false
+    const visitedToday = new Set()
 
-        // Absence ponctuelle sur ce jour exact
-        if (absentSet.has(`${p.id}|${day.date}`)) return false
-
-        const patientDay = (p.availability ?? {})[day.key] ?? {}
-        if (patientDay.unavailable === true) return false
+    for (let i = 0; i < maxVisits && visitedToday.size < todayPatients.length; i++) {
+      const candidates = todayPatients.filter((p) => {
+        if (visitedToday.has(p.id)) return false
 
         const { minutes: travelMin } = travel(currentLat, currentLng, p.lat, p.lng)
-        const travelWithBuffer = travelMin + travelBuffer
         const duration = Number(p.session_duration_min ?? 30)
-        const startVisit = currentTime + travelWithBuffer
+        const startVisit = currentTime + travelMin + travelBuffer
         const endVisit = startVisit + duration
 
         if (endVisit > dayEnd) return false
         if (isInsideBlocked(startVisit, endVisit, therapistBlocked)) return false
 
-        const patientAvailable = normalizeWindows(patientDay.available_windows)
-        const patientBlocked = normalizeWindows(patientDay.blocked_windows)
-
-        if (!isInsideAvailable(startVisit, endVisit, patientAvailable)) return false
+        const patientBlocked = normalizeWindows((p.availability?.[day.key] ?? {}).blocked_windows)
         if (isInsideBlocked(startVisit, endVisit, patientBlocked)) return false
 
         return true
@@ -243,20 +298,17 @@ export async function generateSchedule({
 
       if (!candidates.length) break
 
-      // Choisir le patient le plus proche (parmi les fixes en priorité déjà triés)
+      // Fixes en tête, sinon plus proche
       const scored = candidates.map((p) => {
         const { minutes } = travel(currentLat, currentLng, p.lat, p.lng)
         return { patient: p, score: p.is_fixed ? -Infinity : minutes }
       })
-      // Si au moins un fixe, on prend le premier (déjà trié) sans optimiser la distance
-      // Sinon on prend le plus proche
       scored.sort((a, b) => a.score - b.score)
       const chosen = scored[0].patient
 
       const { minutes: travelMin, km: travelKm } = travel(currentLat, currentLng, chosen.lat, chosen.lng)
-      const travelWithBuffer = travelMin + travelBuffer
       const duration = Number(chosen.session_duration_min ?? 30)
-      const visitStart = currentTime + travelWithBuffer
+      const visitStart = currentTime + travelMin + travelBuffer
       const visitEnd = visitStart + duration
 
       visits.push({
@@ -268,13 +320,13 @@ export async function generateSchedule({
         start_time: formatMinutes(visitStart),
         end_time: formatMinutes(visitEnd),
         session_duration_min: duration,
-        estimated_travel_min: travelWithBuffer,
+        estimated_travel_min: travelMin + travelBuffer,
         estimated_km: travelKm,
         is_fixed: chosen.is_fixed ?? false,
         done: false,
       })
 
-      remainingVisits.set(chosen.id, (remainingVisits.get(chosen.id) ?? 1) - 1)
+      visitedToday.add(chosen.id)
       currentTime = visitEnd + sessionBuffer
       currentLat = chosen.lat
       currentLng = chosen.lng
@@ -284,10 +336,6 @@ export async function generateSchedule({
     const endLat = dayConfig.end_lat ?? therapist?.default_end_lat
     const endLng = dayConfig.end_lng ?? therapist?.default_end_lng
     const { minutes: returnMin, km: returnKm } = travel(currentLat, currentLng, endLat, endLng)
-
-    const totalTravelMin = visits.reduce((s, v) => s + v.estimated_travel_min, 0) + returnMin
-    const totalSessionMin = visits.reduce((s, v) => s + v.session_duration_min, 0)
-    const totalKm = visits.reduce((s, v) => s + (v.estimated_km ?? 0), 0) + returnKm
 
     result.push({
       day: day.key,
@@ -300,9 +348,9 @@ export async function generateSchedule({
       visits,
       stats: {
         total_visits: visits.length,
-        total_travel_min: Math.round(totalTravelMin),
-        total_session_min: Math.round(totalSessionMin),
-        total_km: Math.round(totalKm * 10) / 10,
+        total_travel_min: Math.round(visits.reduce((s, v) => s + v.estimated_travel_min, 0) + returnMin),
+        total_session_min: Math.round(visits.reduce((s, v) => s + v.session_duration_min, 0)),
+        total_km: Math.round((visits.reduce((s, v) => s + (v.estimated_km ?? 0), 0) + returnKm) * 10) / 10,
       },
     })
   }

@@ -87,6 +87,10 @@ function isInsideBlocked(timeStart, timeEnd, blockedWindows) {
   return blockedWindows.some((b) => !(timeEnd <= b.start || timeStart >= b.end))
 }
 
+// Jours des deux tournées fixes
+const TOURNEE_A = ['monday', 'wednesday']
+const TOURNEE_B = ['tuesday', 'thursday']
+
 /**
  * Pré-assigne chaque patient à des jours spécifiques de la semaine.
  *
@@ -94,15 +98,15 @@ function isInsideBlocked(timeStart, timeEnd, blockedWindows) {
  *  - Respecte sessions_per_week
  *  - Minimum 2 jours d'écart entre deux passages (règle des 48h)
  *  - Respecte les indisponibilités du patient et ses absences ponctuelles
- *  - Patterns naturels :
- *      1x/sem → 1 jour quelconque
- *      2x/sem → Lun+Mer, Mar+Jeu, Mer+Ven… (écart ≥ 2)
- *      3x/sem → Lun+Mer+Ven de préférence
+ *  - Tournée explicite (patient.tournee = 'A' ou 'B') : jours préférés Lun+Mer ou Mar+Jeu
+ *  - Tournée automatique (2x/sem) : équilibre entre A et B en alternant
+ *  - 3x/sem : Lun+Mer+Ven de préférence
  *
  * Retourne un Map : patientId → [dayKey, ...]
  */
 function preAssignDays(patients, enabledDays, absentSet) {
   const assignments = new Map()
+  let autoTourneeCounter = 0 // pour alterner A/B en auto
 
   for (const patient of patients) {
     if (!patient.active) { assignments.set(patient.id, []); continue }
@@ -120,10 +124,31 @@ function preAssignDays(patients, enabledDays, absentSet) {
 
     if (!availableDays.length) { assignments.set(patient.id, []); continue }
 
+    // Déterminer la tournée préférée
+    let preferred = null
+    if (patient.tournee === 'A') {
+      preferred = TOURNEE_A
+    } else if (patient.tournee === 'B') {
+      preferred = TOURNEE_B
+    } else if (n === 2) {
+      // Auto-équilibre : alterner A et B
+      preferred = autoTourneeCounter % 2 === 0 ? TOURNEE_A : TOURNEE_B
+      autoTourneeCounter++
+    }
+
+    // Trier les jours disponibles : jours préférés en premier, puis par dow
+    const sortedDays = preferred
+      ? [...availableDays].sort((a, b) => {
+          const aP = preferred.includes(a.key) ? 0 : 1
+          const bP = preferred.includes(b.key) ? 0 : 1
+          return aP - bP || a.dow - b.dow
+        })
+      : availableDays
+
     // Sélection gloutonne : n jours avec écart ≥ 2 entre chaque
     function pickWithGap(remaining, minDow, chosen) {
       if (remaining === 0) return chosen
-      for (const day of availableDays) {
+      for (const day of sortedDays) {
         if (day.dow >= minDow) {
           const result = pickWithGap(remaining - 1, day.dow + 2, [...chosen, day.key])
           if (result) return result
@@ -137,8 +162,8 @@ function preAssignDays(patients, enabledDays, absentSet) {
     // Fallback si impossible de respecter l'écart (ex: seulement 2 jours activés
     // et patient 3x/sem) → on prend ce qu'on peut avec écart maximal possible
     if (!picked) {
-      picked = pickWithGap(Math.min(n, availableDays.length), 1, [])
-        ?? availableDays.slice(0, n).map((d) => d.key)
+      picked = pickWithGap(Math.min(n, sortedDays.length), 1, [])
+        ?? sortedDays.slice(0, n).map((d) => d.key)
     }
 
     assignments.set(patient.id, picked)
