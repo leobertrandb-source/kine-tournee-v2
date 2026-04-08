@@ -281,7 +281,17 @@ export async function generateSchedule({
         return true
       })
 
-      if (!candidates.length) break
+      if (!candidates.length) {
+        // Sauter par-dessus la prochaine plage bloquée du thérapeute et réessayer
+        const nextBlock = therapistBlocked
+          .filter((b) => b.end > currentTime)
+          .sort((a, b) => a.end - b.end)[0]
+        if (nextBlock && nextBlock.end < dayEnd) {
+          currentTime = nextBlock.end
+          continue
+        }
+        break
+      }
 
       // Fixes en tête, sinon plus proche
       const scored = candidates.map((p) => {
