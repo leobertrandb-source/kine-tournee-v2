@@ -87,7 +87,6 @@ function isInsideBlocked(timeStart, timeEnd, blockedWindows) {
   return blockedWindows.some((b) => !(timeEnd <= b.start || timeStart >= b.end))
 }
 
-// Jours des deux tournées fixes
 const TOURNEE_A = ['monday', 'wednesday']
 const TOURNEE_B = ['tuesday', 'thursday']
 
@@ -95,18 +94,24 @@ const TOURNEE_B = ['tuesday', 'thursday']
  * Pré-assigne chaque patient à des jours spécifiques de la semaine.
  *
  * Règles :
- *  - Respecte sessions_per_week
- *  - Minimum 2 jours d'écart entre deux passages (règle des 48h)
- *  - Respecte les indisponibilités du patient et ses absences ponctuelles
- *  - Tournée explicite (patient.tournee = 'A' ou 'B') : jours préférés Lun+Mer ou Mar+Jeu
- *  - Tournée automatique (2x/sem) : équilibre entre A et B en alternant
+ *  - Respecte sessions_per_week avec écart ≥ 2 jours
+ *  - Tournée explicite (patient.tournee = 'A' ou 'B') : préfère Lun+Mer ou Mar+Jeu
+ *  - Tournée automatique (2x/sem) : assignation géographique (proximité départ tournée A vs B)
+ *    → fallback round-robin si coordonnées manquantes ou identiques
  *  - 3x/sem : Lun+Mer+Ven de préférence
  *
- * Retourne un Map : patientId → [dayKey, ...]
+ * @param startLocByDay - { monday:{lat,lng}, tuesday:{lat,lng}, … }
  */
-function preAssignDays(patients, enabledDays, absentSet) {
+function preAssignDays(patients, enabledDays, absentSet, startLocByDay = {}) {
   const assignments = new Map()
-  let autoTourneeCounter = 0 // pour alterner A/B en auto
+  let autoTourneeCounter = 0
+
+  const aLoc = startLocByDay['monday']
+  const bLoc = startLocByDay['tuesday']
+  const geoAvailable = !!(
+    aLoc?.lat && aLoc?.lng && bLoc?.lat && bLoc?.lng &&
+    (aLoc.lat !== bLoc.lat || aLoc.lng !== bLoc.lng)
+  )
 
   for (const patient of patients) {
     if (!patient.active) { assignments.set(patient.id, []); continue }
@@ -114,29 +119,31 @@ function preAssignDays(patients, enabledDays, absentSet) {
     const n = Math.max(0, Number(patient.sessions_per_week ?? 1))
     if (n === 0) { assignments.set(patient.id, []); continue }
 
-    // Jours disponibles pour ce patient cette semaine
     const availableDays = enabledDays.filter((day) => {
       if (absentSet.has(`${patient.id}|${day.date}`)) return false
       const dayAvail = (patient.availability ?? {})[day.key] ?? {}
-      if (dayAvail.unavailable === true) return false
-      return true
+      return dayAvail.unavailable !== true
     })
 
     if (!availableDays.length) { assignments.set(patient.id, []); continue }
 
-    // Déterminer la tournée préférée
     let preferred = null
     if (patient.tournee === 'A') {
       preferred = TOURNEE_A
     } else if (patient.tournee === 'B') {
       preferred = TOURNEE_B
     } else if (n === 2) {
-      // Auto-équilibre : alterner A et B
-      preferred = autoTourneeCounter % 2 === 0 ? TOURNEE_A : TOURNEE_B
-      autoTourneeCounter++
+      if (geoAvailable && patient.lat && patient.lng) {
+        // Assignation géographique : tournée dont le départ est le plus proche du patient
+        const distA = euclideanKm(patient.lat, patient.lng, aLoc.lat, aLoc.lng)
+        const distB = euclideanKm(patient.lat, patient.lng, bLoc.lat, bLoc.lng)
+        preferred = distA <= distB ? TOURNEE_A : TOURNEE_B
+      } else {
+        preferred = autoTourneeCounter % 2 === 0 ? TOURNEE_A : TOURNEE_B
+        autoTourneeCounter++
+      }
     }
 
-    // Trier les jours disponibles : jours préférés en premier, puis par dow
     const sortedDays = preferred
       ? [...availableDays].sort((a, b) => {
           const aP = preferred.includes(a.key) ? 0 : 1
@@ -145,7 +152,6 @@ function preAssignDays(patients, enabledDays, absentSet) {
         })
       : availableDays
 
-    // Sélection gloutonne : n jours avec écart ≥ 2 entre chaque
     function pickWithGap(remaining, minDow, chosen) {
       if (remaining === 0) return chosen
       for (const day of sortedDays) {
@@ -158,9 +164,6 @@ function preAssignDays(patients, enabledDays, absentSet) {
     }
 
     let picked = pickWithGap(n, 1, [])
-
-    // Fallback si impossible de respecter l'écart (ex: seulement 2 jours activés
-    // et patient 3x/sem) → on prend ce qu'on peut avec écart maximal possible
     if (!picked) {
       picked = pickWithGap(Math.min(n, sortedDays.length), 1, [])
         ?? sortedDays.slice(0, n).map((d) => d.key)
@@ -217,8 +220,18 @@ export async function generateSchedule({
   const travel = createTravelFn(matrix, allLocations)
   const routingSource = matrix ? 'osrm' : 'euclidean'
 
-  // ── Pré-assignation des patients aux jours (règle 48h) ────────────────────
-  const dayAssignments = preAssignDays(patients, enabledDays, absentSet)
+  // ── Coordonnées de départ par jour (pour l'assignation géographique) ────────
+  const startLocByDay = {}
+  days.forEach((day) => {
+    const cfg = weeklyConfig[day.key]
+    if (!cfg?.enabled) return
+    const lat = cfg.start_lat ?? therapist?.default_start_lat
+    const lng = cfg.start_lng ?? therapist?.default_start_lng
+    if (lat && lng) startLocByDay[day.key] = { lat, lng }
+  })
+
+  // ── Pré-assignation des patients aux jours (règle 48h + géographie) ───────
+  const dayAssignments = preAssignDays(patients, enabledDays, absentSet, startLocByDay)
 
   // Index inverse : dayKey → [patients assignés ce jour]
   const patientsByDay = new Map(days.map((d) => [d.key, []]))

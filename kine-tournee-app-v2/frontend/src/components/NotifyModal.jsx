@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useToast } from './Toast'
 
 // Formate un numéro français en format international pour WhatsApp
@@ -54,7 +54,13 @@ function PatientNotifRow({ patient, visits, therapistName, weekLabel, msgType })
   const [open, setOpen] = useState(false)
 
   const firstName = patient.sms_first_name || patient.full_name?.split(' ')[0] || patient.full_name || 'Bonjour'
-  const message = buildMessage(firstName, visits, weekLabel, therapistName, msgType)
+
+  // Message éditable — se réinitialise automatiquement quand le type global change
+  const [message, setMessage] = useState(() => buildMessage(firstName, visits, weekLabel, therapistName, msgType))
+  useEffect(() => {
+    setMessage(buildMessage(firstName, visits, weekLabel, therapistName, msgType))
+  }, [msgType]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const waNumber = toWhatsAppNumber(patient.phone)
   const waUrl = waNumber ? `https://wa.me/${waNumber}?text=${encodeURIComponent(message)}` : null
   const mailUrl = patient.email
@@ -97,7 +103,26 @@ function PatientNotifRow({ patient, visits, therapistName, weekLabel, msgType })
         </div>
       </div>
       {open && (
-        <pre className="notif-preview">{message}</pre>
+        <div style={{ padding: '0 16px 12px' }}>
+          <textarea
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            rows={10}
+            style={{
+              width: '100%', boxSizing: 'border-box', fontFamily: 'inherit',
+              fontSize: 13, lineHeight: 1.5, padding: '8px 10px',
+              borderRadius: 6, border: '1px solid var(--border)',
+              resize: 'vertical', background: 'var(--surface2)',
+            }}
+          />
+          <button
+            className="secondary small-btn"
+            style={{ marginTop: 4 }}
+            onClick={() => setMessage(buildMessage(firstName, visits, weekLabel, therapistName, msgType))}
+          >
+            ↺ Réinitialiser
+          </button>
+        </div>
       )}
     </div>
   )

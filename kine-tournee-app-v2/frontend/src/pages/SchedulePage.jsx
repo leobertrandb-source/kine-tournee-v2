@@ -220,6 +220,19 @@ function DayStats({ stats }) {
   )
 }
 
+// ── Calcul avance/retard par rapport au planning ───────────────────────────────
+// Retourne le delta en minutes (>0 = retard, <0 = avance) ou null si non applicable
+function computeDelayMin(visits, completions, date) {
+  const doneVisits = visits.filter((v) => completions[`${v.patient_id}|${date}`]?.done ?? v.done)
+  // N'afficher que si en cours de journée (au moins 1 validé, pas tous)
+  if (!doneVisits.length || doneVisits.length === visits.length) return null
+  const lastDone = doneVisits[doneVisits.length - 1]
+  const plannedEndMin = parseMin(lastDone.end_time)
+  const now = new Date()
+  const nowMin = now.getHours() * 60 + now.getMinutes()
+  return nowMin - plannedEndMin
+}
+
 // ── Bloc journée ──────────────────────────────────────────────────────────────
 function DayBlock({ day, therapist, weeklyConfig, completions, onCompletionToggle, onVisitsReorder, viewMode, userPosition }) {
   const [showMap, setShowMap] = useState(false)
@@ -230,6 +243,7 @@ function DayBlock({ day, therapist, weeklyConfig, completions, onCompletionToggl
   const endLng = dayConfig.end_lng ?? therapist?.default_end_lng
   const dayLabel = `${DAY_LABELS_FR[day.day] || day.day} ${new Date(day.date + 'T00:00:00').toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })}`
   const doneCount = day.visits.filter((v) => completions[`${v.patient_id}|${day.date}`]?.done ?? v.done).length
+  const delayMin = computeDelayMin(day.visits, completions, day.date)
 
   return (
     <div className="card">
@@ -260,6 +274,22 @@ function DayBlock({ day, therapist, weeklyConfig, completions, onCompletionToggl
       </div>
 
       {day.visits.length > 0 && <DayStats stats={day.stats} />}
+
+      {/* Bannière avance / retard */}
+      {delayMin !== null && (
+        <div style={{
+          padding: '8px 14px', borderRadius: 6, fontWeight: 600, fontSize: 13,
+          background: delayMin > 5 ? '#fef3c7' : '#dcfce7',
+          color: delayMin > 5 ? '#92400e' : '#166534',
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          {delayMin > 5
+            ? `⚠ Retard estimé : ${delayMin} min — pensez à prévenir la suite de la tournée`
+            : delayMin < -3
+              ? `✅ Avance estimée : ${Math.abs(delayMin)} min — vous pouvez prévenir les prochains patients`
+              : '✅ Dans les temps'}
+        </div>
+      )}
 
       {showMap && window.L && (
         <DayMap day={day} startLat={startLat} startLng={startLng} endLat={endLat} endLng={endLng} userPosition={userPosition} />
@@ -339,7 +369,8 @@ export default function SchedulePage({ schedule, setSchedule, weekStart, setWeek
     try {
       const updated = await api.upsertCompletion({ patient_id: patientId, visit_date: visitDate, done })
       setCompletions((prev) => ({ ...prev, [key]: updated }))
-      if (done) toast.success('Séance marquée comme effectuée ✓')
+      if (done) toast.success('Séance validée ✓')
+      else toast.info('Séance remise en attente')
     } catch { toast.error('Erreur lors de la mise à jour') }
   }
 
@@ -406,7 +437,7 @@ export default function SchedulePage({ schedule, setSchedule, weekStart, setWeek
           </button>
           {schedule && (
             <>
-              <button className="secondary small-btn" onClick={handleSaveManual} disabled={saving}>{saving ? '…' : '💾'}</button>
+              <button className="secondary small-btn" onClick={handleSaveManual} disabled={saving}>{saving ? '…' : '💾 Sauvegarder'}</button>
               <button className="secondary small-btn" onClick={handleCopyWeek} title="Générer la semaine suivante">⏭ Semaine +1</button>
               <button className="secondary small-btn" onClick={handleLocate} title="Ma position">📍 Me localiser</button>
               <button className="btn-notify" onClick={() => setShowNotify(true)} title="Envoyer les horaires aux patients">📱 Notifier</button>

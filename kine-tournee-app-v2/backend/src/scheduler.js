@@ -115,12 +115,21 @@ function isInsideBlocked(timeStart, timeEnd, blockedWindows) {
  * Règles :
  *  - Respecte sessions_per_week avec écart ≥ 2 jours
  *  - Tournée explicite (patient.tournee = 'A' ou 'B') : préfère Lun+Mer ou Mar+Jeu
- *  - Tournée automatique (2x/sem) : équilibre entre A et B en alternant
- *  - 3x/sem : Lun+Mer+Ven de préférence
+ *  - Tournée automatique (2x/sem) : assignation géographique (proximité départ A vs B)
+ *    → fallback round-robin si coordonnées manquantes
+ *
+ * @param startLocByDay - { monday:{lat,lng}, tuesday:{lat,lng}, … }
  */
-function preAssignDays(patients, enabledDays, absentSet) {
+function preAssignDays(patients, enabledDays, absentSet, startLocByDay = {}) {
   const assignments = new Map()
   let autoTourneeCounter = 0
+
+  const aLoc = startLocByDay['monday']
+  const bLoc = startLocByDay['tuesday']
+  const geoAvailable = !!(
+    aLoc?.lat && aLoc?.lng && bLoc?.lat && bLoc?.lng &&
+    (aLoc.lat !== bLoc.lat || aLoc.lng !== bLoc.lng)
+  )
 
   for (const patient of patients) {
     if (!patient.active) { assignments.set(patient.id, []); continue }
@@ -131,21 +140,25 @@ function preAssignDays(patients, enabledDays, absentSet) {
     const availableDays = enabledDays.filter((day) => {
       if (absentSet.has(`${patient.id}|${day.date}`)) return false
       const dayAvail = (patient.availability ?? {})[day.key] ?? {}
-      if (dayAvail.unavailable === true) return false
-      return true
+      return dayAvail.unavailable !== true
     })
 
     if (!availableDays.length) { assignments.set(patient.id, []); continue }
 
-    // Déterminer la tournée préférée
     let preferred = null
     if (patient.tournee === 'A') {
       preferred = TOURNEE_A
     } else if (patient.tournee === 'B') {
       preferred = TOURNEE_B
     } else if (n === 2) {
-      preferred = autoTourneeCounter % 2 === 0 ? TOURNEE_A : TOURNEE_B
-      autoTourneeCounter++
+      if (geoAvailable && patient.lat && patient.lng) {
+        const distA = euclideanKm(patient.lat, patient.lng, aLoc.lat, aLoc.lng)
+        const distB = euclideanKm(patient.lat, patient.lng, bLoc.lat, bLoc.lng)
+        preferred = distA <= distB ? TOURNEE_A : TOURNEE_B
+      } else {
+        preferred = autoTourneeCounter % 2 === 0 ? TOURNEE_A : TOURNEE_B
+        autoTourneeCounter++
+      }
     }
 
     const sortedDays = preferred
@@ -229,8 +242,18 @@ export async function generateSchedule({
   const travel = createTravelFn(matrix, allLocations)
   const routingSource = matrix ? 'osrm' : 'euclidean'
 
-  // ── Pré-assignation des patients aux jours (règle 48h + tournées) ───────────
-  const dayAssignments = preAssignDays(patients, enabledDays, absentSet)
+  // ── Coordonnées de départ par jour (pour l'assignation géographique) ────────
+  const startLocByDay = {}
+  days.forEach((day) => {
+    const cfg = weeklyConfig[day.key]
+    if (!cfg?.enabled) return
+    const lat = cfg.start_lat ?? therapist?.default_start_lat
+    const lng = cfg.start_lng ?? therapist?.default_start_lng
+    if (lat && lng) startLocByDay[day.key] = { lat, lng }
+  })
+
+  // ── Pré-assignation des patients aux jours (règle 48h + géographie) ─────────
+  const dayAssignments = preAssignDays(patients, enabledDays, absentSet, startLocByDay)
 
   // Index inverse : dayKey → [patients assignés ce jour]
   const patientsByDay = new Map(days.map((d) => [d.key, []]))
