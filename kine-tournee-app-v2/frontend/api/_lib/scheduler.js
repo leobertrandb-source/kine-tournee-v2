@@ -107,8 +107,11 @@ function availableMinutesInDay(dayStart, dayEnd, therapistBlocked, patientBlocke
 /**
  * Évalue un ordre de visite : retourne { totalTravel, schedule } si faisable,
  * null sinon. Saute automatiquement les plages bloquées thérapeute.
+ * totalTravel inclut le trajet de retour (endLat/endLng) pour que les
+ * algorithmes d'optimisation placent naturellement les patients proches
+ * du domicile/cabinet en dernière position.
  */
-function computeRouteOrder(orderedPatients, { startLat, startLng, dayStart, dayEnd, dayKey, dayDate, therapistBlocked, partialAbsenceMap, travel, travelBuffer, sessionBuffer }) {
+function computeRouteOrder(orderedPatients, { startLat, startLng, endLat, endLng, dayStart, dayEnd, dayKey, dayDate, therapistBlocked, partialAbsenceMap, travel, travelBuffer, sessionBuffer }) {
   let t = dayStart
   let lat = startLat
   let lng = startLng
@@ -142,6 +145,13 @@ function computeRouteOrder(orderedPatients, { startLat, startLng, dayStart, dayE
     lat = p.lat
     lng = p.lng
     t = visitEnd + sessionBuffer
+  }
+
+  // Inclure le trajet de retour dans le coût total — indispensable pour que
+  // 2-opt / or-opt placent les patients proches du point d'arrivée en dernier
+  if (endLat && endLng && schedule.length > 0) {
+    const { minutes: returnMin } = travel(lat, lng, endLat, endLng)
+    totalTravel += returnMin
   }
 
   return { totalTravel, schedule }
@@ -558,10 +568,15 @@ export async function generateSchedule({
         break
       }
 
-      // Fixes en tête, sinon plus proche
+      // Fixes en tête, sinon score = trajet(actuel→p) + 0.4 × trajet(p→arrivée)
+      // → le coefficient 0.4 attire progressivement les patients proches du
+      //   point d'arrivée vers la fin de la tournée (ex. cabinet = dernier)
+      const remaining = todayPatients.filter((p) => !visitedToday.has(p.id)).length
+      const endWeight = endLat && endLng ? 0.4 : 0
       const scored = candidates.map((p) => {
-        const { minutes } = travel(currentLat, currentLng, p.lat, p.lng)
-        return { patient: p, score: p.is_fixed ? -Infinity : minutes }
+        const { minutes: toP } = travel(currentLat, currentLng, p.lat, p.lng)
+        const { minutes: toEnd } = endLat && endLng ? travel(p.lat, p.lng, endLat, endLng) : { minutes: 0 }
+        return { patient: p, score: p.is_fixed ? -Infinity : toP + endWeight * toEnd }
       })
       scored.sort((a, b) => a.score - b.score)
       const chosen = scored[0].patient
@@ -593,11 +608,15 @@ export async function generateSchedule({
     }
 
     // ── Optimisation de l'ordre des visites : 2-opt → or-opt → or-opt-2 ───────
+    const endLat = dayConfig.end_lat ?? therapist?.default_end_lat
+    const endLng = dayConfig.end_lng ?? therapist?.default_end_lng
+
     if (visits.length >= 3) {
       const patientById = new Map(patients.map((p) => [p.id, p]))
       const greedyPatients = visits.map((v) => patientById.get(v.patient_id)).filter(Boolean)
       const routeCtx = {
         startLat: dayStartLat, startLng: dayStartLng,
+        endLat, endLng,
         dayStart, dayEnd, dayKey: day.key, dayDate: day.date,
         therapistBlocked, partialAbsenceMap,
         travel, travelBuffer, sessionBuffer,
@@ -635,9 +654,7 @@ export async function generateSchedule({
       }
     }
 
-    // Retour
-    const endLat = dayConfig.end_lat ?? therapist?.default_end_lat
-    const endLng = dayConfig.end_lng ?? therapist?.default_end_lng
+    // Retour (endLat/endLng déclarés plus haut pour les optimisations)
     const { minutes: returnMin, km: returnKm } = travel(currentLat, currentLng, endLat, endLng)
 
     result.push({
@@ -683,6 +700,8 @@ export async function generateSchedule({
     const ctxA = {
       startLat: cfgA.start_lat ?? therapist?.default_start_lat,
       startLng: cfgA.start_lng ?? therapist?.default_start_lng,
+      endLat: cfgA.end_lat ?? therapist?.default_end_lat,
+      endLng: cfgA.end_lng ?? therapist?.default_end_lng,
       dayStart: parseMinutes(cfgA.work_start), dayEnd: parseMinutes(cfgA.work_end),
       dayKey: dayA, dayDate: dayDataA.date,
       therapistBlocked: normalizeWindows(cfgA.blocked_windows),
@@ -691,6 +710,8 @@ export async function generateSchedule({
     const ctxB = {
       startLat: cfgB.start_lat ?? therapist?.default_start_lat,
       startLng: cfgB.start_lng ?? therapist?.default_start_lng,
+      endLat: cfgB.end_lat ?? therapist?.default_end_lat,
+      endLng: cfgB.end_lng ?? therapist?.default_end_lng,
       dayStart: parseMinutes(cfgB.work_start), dayEnd: parseMinutes(cfgB.work_end),
       dayKey: dayB, dayDate: dayDataB.date,
       therapistBlocked: normalizeWindows(cfgB.blocked_windows),
