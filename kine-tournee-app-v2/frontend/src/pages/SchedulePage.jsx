@@ -242,6 +242,90 @@ function DayStats({ stats }) {
   )
 }
 
+// ── Utilitaires numéro WhatsApp ───────────────────────────────────────────────
+function toWhatsAppNumber(phone) {
+  if (!phone) return null
+  const digits = phone.replace(/\D/g, '')
+  if (digits.startsWith('33')) return digits
+  if (digits.startsWith('0') && digits.length === 10) return '33' + digits.slice(1)
+  return digits.length >= 9 ? digits : null
+}
+
+// ── Modal retard / avance → notifier les patients restants ────────────────────
+function DelayNotifyModal({ day, completions, delayMin, patients, therapist, onClose }) {
+  const toast = useToast()
+  const isRetard = delayMin > 0
+  const absDelay = Math.abs(delayMin)
+
+  // Dernière visite validée → les patients restants sont ceux qui viennent après
+  const lastDoneIdx = day.visits.reduce((acc, v, i) => {
+    if (completions[`${v.patient_id}|${day.date}`]?.done ?? v.done) return i
+    return acc
+  }, -1)
+
+  const remaining = day.visits
+    .slice(lastDoneIdx + 1)
+    .filter((v) => !(completions[`${v.patient_id}|${day.date}`]?.done ?? v.done))
+
+  function buildMsg(visit) {
+    const p = patients.find((pt) => pt.id === visit.patient_id)
+    const firstName = p?.sms_first_name || p?.full_name?.split(' ')[0] || 'Bonjour'
+    const newTime = fmtMin(Math.max(0, parseMin(visit.start_time) + delayMin))
+    if (isRetard) {
+      return `Bonjour ${firstName}, je suis actuellement en retard de ${absDelay} minute${absDelay > 1 ? 's' : ''}. Je passerai vers ${newTime} environ. Merci de votre compréhension.\n\n${therapist?.full_name || 'Votre kinésithérapeute'}`
+    }
+    return `Bonjour ${firstName}, je suis en avance de ${absDelay} minute${absDelay > 1 ? 's' : ''} aujourd'hui. Je pourrais passer vers ${newTime}. Êtes-vous disponible un peu plus tôt ?\n\n${therapist?.full_name || 'Votre kinésithérapeute'}`
+  }
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div className="modal-box notif-modal" onClick={(e) => e.stopPropagation()}>
+        <div className="modal-header">
+          <div>
+            <div className="modal-title">
+              {isRetard ? `⚠ Retard ${absDelay} min — Prévenir les patients suivants` : `✅ Avance ${absDelay} min — Prévenir les patients suivants`}
+            </div>
+            <div className="small muted">{remaining.length} patient{remaining.length > 1 ? 's' : ''} restant{remaining.length > 1 ? 's' : ''}</div>
+          </div>
+          <button className="secondary small-btn" onClick={onClose}>✕</button>
+        </div>
+        <div className="notif-list">
+          {remaining.length === 0 && <div className="empty-state">Aucun patient restant à prévenir.</div>}
+          {remaining.map((visit) => {
+            const p = patients.find((pt) => pt.id === visit.patient_id)
+            const msg = buildMsg(visit)
+            const waNum = toWhatsAppNumber(p?.phone)
+            const waUrl = waNum ? `https://wa.me/${waNum}?text=${encodeURIComponent(msg)}` : null
+            const newTime = fmtMin(Math.max(0, parseMin(visit.start_time) + delayMin))
+            return (
+              <div key={visit.patient_id} className="notif-row">
+                <div className="notif-row-header">
+                  <div>
+                    <div style={{ fontWeight: 700 }}>{visit.patient_name}</div>
+                    <div className="small muted">
+                      Prévu <strong>{visit.start_time}</strong> → estimé <strong>{newTime}</strong>
+                    </div>
+                  </div>
+                  <div className="notif-row-btns">
+                    {waUrl
+                      ? <a className="notif-btn notif-btn--wa" href={waUrl} target="_blank" rel="noopener noreferrer">💬 WhatsApp</a>
+                      : <span className="small muted" title="Numéro manquant">Pas de n°</span>
+                    }
+                    <button className="notif-btn notif-btn--copy" onClick={async () => {
+                      try { await navigator.clipboard.writeText(msg); toast.success('Copié ✓') }
+                      catch { toast.error('Impossible de copier') }
+                    }}>📋 Copier</button>
+                  </div>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 // ── Notifications push système ────────────────────────────────────────────────
 function notifSupported() { return 'Notification' in window }
 function notifGranted() { return notifSupported() && Notification.permission === 'granted' }
@@ -280,8 +364,9 @@ function computeDelayMin(visits, completions, date) {
 }
 
 // ── Bloc journée ──────────────────────────────────────────────────────────────
-function DayBlock({ day, therapist, weeklyConfig, completions, onCompletionToggle, onVisitsReorder, viewMode, userPosition }) {
+function DayBlock({ day, therapist, weeklyConfig, completions, onCompletionToggle, onVisitsReorder, viewMode, userPosition, patients }) {
   const [showMap, setShowMap] = useState(false)
+  const [showDelayNotify, setShowDelayNotify] = useState(false)
   const dayConfig = weeklyConfig?.[day.day] || {}
   const startLat = dayConfig.start_lat ?? therapist?.default_start_lat
   const startLng = dayConfig.start_lng ?? therapist?.default_start_lng
@@ -323,18 +408,44 @@ function DayBlock({ day, therapist, weeklyConfig, completions, onCompletionToggl
 
       {/* Bannière avance / retard */}
       {delayMin !== null && (
-        <div style={{
-          padding: '8px 14px', borderRadius: 6, fontWeight: 600, fontSize: 13,
-          background: delayMin > 5 ? '#fef3c7' : '#dcfce7',
-          color: delayMin > 5 ? '#92400e' : '#166534',
-          display: 'flex', alignItems: 'center', gap: 8,
-        }}>
-          {delayMin > 5
-            ? `⚠ Retard estimé : ${delayMin} min — pensez à prévenir la suite de la tournée`
-            : delayMin < -3
-              ? `✅ Avance estimée : ${Math.abs(delayMin)} min — vous pouvez prévenir les prochains patients`
-              : '✅ Dans les temps'}
-        </div>
+        <>
+          {showDelayNotify && (
+            <DelayNotifyModal
+              day={day}
+              completions={completions}
+              delayMin={delayMin}
+              patients={patients || []}
+              therapist={therapist}
+              onClose={() => setShowDelayNotify(false)}
+            />
+          )}
+          <div style={{
+            padding: '8px 14px', borderRadius: 6, fontWeight: 600, fontSize: 13,
+            background: delayMin > 5 ? '#fef3c7' : '#dcfce7',
+            color: delayMin > 5 ? '#92400e' : '#166534',
+            display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap',
+          }}>
+            <span style={{ flex: 1 }}>
+              {delayMin > 5
+                ? `⚠ Retard estimé : ${delayMin} min`
+                : delayMin < -3
+                  ? `✅ Avance estimée : ${Math.abs(delayMin)} min`
+                  : '✅ Dans les temps'}
+            </span>
+            {(delayMin > 5 || delayMin < -3) && (
+              <button
+                style={{
+                  background: delayMin > 5 ? '#92400e' : '#166534',
+                  color: '#fff', border: 'none', borderRadius: 6,
+                  padding: '4px 10px', fontSize: 12, cursor: 'pointer', fontWeight: 600,
+                }}
+                onClick={() => setShowDelayNotify(true)}
+              >
+                📱 Prévenir les patients suivants
+              </button>
+            )}
+          </div>
+        </>
       )}
 
       {showMap && window.L && (
@@ -561,7 +672,8 @@ export default function SchedulePage({ schedule, setSchedule, weekStart, setWeek
           {schedule.days.map((day) => (
             <DayBlock key={day.date} day={day} therapist={therapist} weeklyConfig={weeklyConfig}
               completions={completions} onCompletionToggle={handleCompletionToggle}
-              onVisitsReorder={handleVisitsReorder} viewMode={viewMode} userPosition={userPosition} />
+              onVisitsReorder={handleVisitsReorder} viewMode={viewMode} userPosition={userPosition}
+              patients={patients || []} />
           ))}
           <div className="print-only print-header">
             <h1>Tournée — Semaine du {weekStart}</h1>
