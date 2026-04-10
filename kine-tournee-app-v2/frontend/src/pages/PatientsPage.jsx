@@ -22,7 +22,7 @@ function Avatar({ name, size = 40 }) {
 
 const EMPTY = {
   full_name: '', address: '', lat: '', lng: '', phone: '', email: '',
-  sms_name: '', time_preference: 'any',
+  sms_first_name: '', tournee: '', time_preference: 'any',
   session_duration_min: 30, sessions_per_week: 2, is_fixed: false, active: true,
   notes: '', availability: {},
 }
@@ -87,6 +87,9 @@ function UnavailabilityEditor({ availability, onChange }) {
 function AbsenceManager({ patientId, absences, setAbsences }) {
   const [date, setDate] = useState('')
   const [reason, setReason] = useState('')
+  const [showTime, setShowTime] = useState(false)
+  const [startTime, setStartTime] = useState('08:00')
+  const [endTime, setEndTime] = useState('12:00')
   const [saving, setSaving] = useState(false)
   const toast = useToast()
 
@@ -94,7 +97,12 @@ function AbsenceManager({ patientId, absences, setAbsences }) {
     if (!date) return
     setSaving(true)
     try {
-      const a = await api.addAbsence(patientId, { absence_date: date, reason })
+      const payload = { absence_date: date, reason }
+      if (showTime && startTime && endTime && startTime < endTime) {
+        payload.start_time = startTime
+        payload.end_time = endTime
+      }
+      const a = await api.addAbsence(patientId, payload)
       setAbsences((prev) => [...prev.filter((x) => x.absence_date !== date), a])
       setDate(''); setReason('')
       toast.success('Absence enregistrée')
@@ -109,20 +117,36 @@ function AbsenceManager({ patientId, absences, setAbsences }) {
 
   return (
     <div className="absence-manager">
-      <div className="small muted" style={{ marginBottom: 6 }}>Absences ponctuelles (le patient ne sera pas planifié ces jours)</div>
+      <div className="small muted" style={{ marginBottom: 6 }}>Absences ponctuelles — sans heure : journée entière exclue ; avec heure : exclusion sur la plage uniquement</div>
       <div className="absence-list">
         {absences.map((a) => (
           <span key={a.absence_date} className="time-badge badge-orange">
-            {a.absence_date}{a.reason ? ` — ${a.reason}` : ''}
+            {a.absence_date}
+            {a.start_time && a.end_time ? ` ${a.start_time.slice(0,5)}–${a.end_time.slice(0,5)}` : ''}
+            {a.reason ? ` — ${a.reason}` : ''}
             <button className="badge-remove" onClick={() => remove(a.absence_date)}>×</button>
           </span>
         ))}
         {absences.length === 0 && <span className="small muted">Aucune absence</span>}
       </div>
-      <div className="time-window-add" style={{ marginTop: 6 }}>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-        <input placeholder="Motif (optionnel)" value={reason} onChange={(e) => setReason(e.target.value)} style={{ flex: 1 }} />
-        <button className="secondary small-btn" onClick={add} disabled={saving || !date}>{saving ? '…' : '+ Ajouter'}</button>
+      <div style={{ marginTop: 6 }}>
+        <div className="time-window-add" style={{ flexWrap: 'wrap' }}>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <input placeholder="Motif (optionnel)" value={reason} onChange={(e) => setReason(e.target.value)} style={{ flex: 1, minWidth: 120 }} />
+          <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
+            <input type="checkbox" checked={showTime} onChange={(e) => setShowTime(e.target.checked)} />
+            Heure
+          </label>
+          <button className="secondary small-btn" onClick={add} disabled={saving || !date}>{saving ? '…' : '+ Ajouter'}</button>
+        </div>
+        {showTime && (
+          <div className="time-window-add" style={{ marginTop: 4 }}>
+            <span className="small muted">De</span>
+            <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+            <span className="small muted">à</span>
+            <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+          </div>
+        )}
       </div>
     </div>
   )
@@ -203,11 +227,9 @@ export default function PatientsPage({ patients, setPatients }) {
         else toast.warning('Adresse introuvable — le patient sera ajouté sans coordonnées GPS')
       }
 
-      const payload = {
-        ...form, lat, lng,
-        prescription_sessions_total: form.prescription_sessions_total === '' ? null : Number(form.prescription_sessions_total),
-        prescription_sessions_done: Number(form.prescription_sessions_done || 0),
-      }
+      // eslint-disable-next-line no-unused-vars
+      const { doctor_name, prescription_sessions_total, prescription_sessions_done, lat: _lat, lng: _lng, ...restForm } = form
+      const payload = { ...restForm, lat, lng }
       if (editingId) {
         const updated = await api.updatePatient(editingId, payload)
         setPatients((prev) => prev.map((p) => p.id === editingId ? updated : p))
@@ -260,13 +282,13 @@ export default function PatientsPage({ patients, setPatients }) {
         <form className="grid" onSubmit={handleSave}>
           <div className="grid grid-2">
             <label>Nom complet *<input value={form.full_name} onChange={(e) => setField('full_name', e.target.value)} required /></label>
-            <label>Téléphone<input value={form.phone} onChange={(e) => setField('phone', e.target.value)} placeholder="06 XX XX XX XX" /></label>
+            <label>Prénom SMS <span className="small muted">(pour les notifications)</span>
+              <input value={form.sms_first_name || ''} onChange={(e) => setField('sms_first_name', e.target.value)} placeholder="Prénom utilisé dans les SMS/WhatsApp" />
+            </label>
           </div>
           <div className="grid grid-2">
-            <label>Prénom pour les SMS
-              <input value={form.sms_name || ''} onChange={(e) => setField('sms_name', e.target.value)} placeholder="Prénom affiché dans les messages" />
-            </label>
-            <label>Email (notifications)
+            <label>Téléphone<input value={form.phone} onChange={(e) => setField('phone', e.target.value)} placeholder="06 XX XX XX XX" /></label>
+            <label>Email (pour les notifications)
               <input type="email" value={form.email || ''} onChange={(e) => setField('email', e.target.value)} placeholder="patient@email.fr" />
             </label>
           </div>
@@ -287,6 +309,13 @@ export default function PatientsPage({ patients, setPatients }) {
           {(!form.lat || !form.lng) && form.address && (
             <div className="address-imprecise-warn">📍 Adresse non géolocalisée — sélectionnez une suggestion dans la liste.</div>
           )}
+          <label>Tournée
+            <select value={form.tournee || ''} onChange={(e) => setField('tournee', e.target.value)}>
+              <option value="">Automatique</option>
+              <option value="A">Tournée A (Lun + Mer)</option>
+              <option value="B">Tournée B (Mar + Jeu)</option>
+            </select>
+          </label>
           <div className="grid grid-2">
             <label>Durée séance (min)<input type="number" min="5" max="120" value={form.session_duration_min} onChange={(e) => setField('session_duration_min', Number(e.target.value))} /></label>
             <label>Séances / semaine<input type="number" min="1" max="7" value={form.sessions_per_week} onChange={(e) => setField('sessions_per_week', Number(e.target.value))} /></label>
@@ -327,7 +356,6 @@ export default function PatientsPage({ patients, setPatients }) {
         </div>
         <div className="patient-list">
           {filtered.map((p) => {
-            const alert = prescriptionAlert(p)
             return (
               <div key={p.id} className={`patient-card ${editingId === p.id ? 'patient-card--editing' : ''} ${!p.active ? 'patient-card--inactive' : ''}`}>
                 <div className="patient-card-header">
@@ -335,6 +363,7 @@ export default function PatientsPage({ patients, setPatients }) {
                   <div style={{ flex: 1 }}>
                     <div className="row" style={{ gap: 6 }}>
                       <strong>{p.full_name}</strong>
+                      {p.tournee && <span className="badge badge-xs" style={{ background: p.tournee === 'A' ? '#dbeafe' : '#fce7f3', color: p.tournee === 'A' ? '#1d4ed8' : '#be185d' }}>T.{p.tournee}</span>}
                       {p.is_fixed && <span className="badge badge-fixed badge-xs">Fixe</span>}
                       {!p.active && <span className="badge badge-inactive badge-xs">Inactif</span>}
                       {(!p.lat || !p.lng) && <span className="badge badge-xs badge-orange" title="Pas de coordonnées GPS — invisible sur la carte">📍 sans GPS</span>}

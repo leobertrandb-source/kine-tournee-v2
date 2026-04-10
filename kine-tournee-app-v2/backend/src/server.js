@@ -55,10 +55,11 @@ app.post('/api/patients', async (req, res) => {
 app.put('/api/patients/:id', async (req, res) => {
   // On extrait uniquement les colonnes connues pour éviter les erreurs Supabase
   const {
-    full_name, address, lat, lng, phone, doctor_name,
+    full_name, address, lat, lng, phone, email, doctor_name,
     session_duration_min, sessions_per_week, active, availability,
     notes, is_fixed,
     prescription_sessions_total, prescription_sessions_done,
+    sms_first_name, tournee,
   } = req.body
 
   const patch = {
@@ -67,6 +68,7 @@ app.put('/api/patients/:id', async (req, res) => {
     ...(lat                     !== undefined && { lat }),
     ...(lng                     !== undefined && { lng }),
     ...(phone                   !== undefined && { phone }),
+    ...(email                   !== undefined && { email }),
     ...(doctor_name             !== undefined && { doctor_name }),
     ...(session_duration_min    !== undefined && { session_duration_min }),
     ...(sessions_per_week       !== undefined && { sessions_per_week }),
@@ -76,6 +78,8 @@ app.put('/api/patients/:id', async (req, res) => {
     ...(is_fixed                !== undefined && { is_fixed }),
     ...(prescription_sessions_total !== undefined && { prescription_sessions_total }),
     ...(prescription_sessions_done  !== undefined && { prescription_sessions_done }),
+    ...(sms_first_name          !== undefined && { sms_first_name }),
+    ...(tournee                 !== undefined && { tournee }),
   }
 
   const { data, error } = await supabase
@@ -231,7 +235,7 @@ app.post('/api/schedule/generate', async (req, res) => {
     supabase.from('patients').select('*').eq('active', true),
     supabase
       .from('patient_absences')
-      .select('patient_id,absence_date')
+      .select('patient_id,absence_date,start_time,end_time')
       .gte('absence_date', weekStart)
       .lte('absence_date', weekEnd),
   ])
@@ -248,7 +252,6 @@ app.post('/api/schedule/generate', async (req, res) => {
 
   try {
     const weeklyConfig = Object.fromEntries((weeklyRows ?? []).map((row) => [row.day_key, row]))
-    const absentSet = new Set((absences ?? []).map((a) => `${a.patient_id}|${a.absence_date}`))
 
     const schedule = await generateSchedule({
       weekStart,
@@ -257,7 +260,7 @@ app.post('/api/schedule/generate', async (req, res) => {
       patients: patients ?? [],
       travelBuffer: therapist?.travel_buffer_min ?? 10,
       sessionBuffer: therapist?.session_buffer_min ?? 5,
-      absentSet,
+      absences: absences ?? [],
     })
 
     const { error: insertError } = await supabase.from('generated_schedules').insert({

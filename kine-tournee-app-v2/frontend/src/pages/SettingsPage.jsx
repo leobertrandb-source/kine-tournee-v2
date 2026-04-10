@@ -17,10 +17,19 @@ const DAY_LABELS = {
 function BlockedWindowsEditor({ windows, onChange }) {
   const [newStart, setNewStart] = useState('12:30')
   const [newEnd, setNewEnd] = useState('13:30')
+  const [newLieu, setNewLieu] = useState('')
+  const [newLieuLat, setNewLieuLat] = useState(null)
+  const [newLieuLng, setNewLieuLng] = useState(null)
 
   function add() {
     if (newStart >= newEnd) return
-    onChange([...(windows ?? []), { start_time: newStart, end_time: newEnd }])
+    const entry = { start_time: newStart, end_time: newEnd }
+    if (newLieu.trim()) {
+      entry.lieu = newLieu.trim()
+      if (newLieuLat && newLieuLng) { entry.lieu_lat = newLieuLat; entry.lieu_lng = newLieuLng }
+    }
+    onChange([...(windows ?? []), entry])
+    setNewLieu(''); setNewLieuLat(null); setNewLieuLng(null)
   }
   function remove(i) {
     onChange((windows ?? []).filter((_, idx) => idx !== i))
@@ -34,7 +43,7 @@ function BlockedWindowsEditor({ windows, onChange }) {
       <div className="time-windows-list" style={{ marginBottom: 8 }}>
         {(windows ?? []).map((w, i) => (
           <span key={i} className="time-badge badge-red">
-            {w.start_time}–{w.end_time}
+            {w.start_time}–{w.end_time}{w.lieu ? ` · ${w.lieu}` : ''}
             <button className="badge-remove" onClick={() => remove(i)}>×</button>
           </span>
         ))}
@@ -42,10 +51,18 @@ function BlockedWindowsEditor({ windows, onChange }) {
           <span className="small muted">Aucune pause configurée</span>
         )}
       </div>
-      <div className="time-window-add">
+      <div className="time-window-add" style={{ flexWrap: 'wrap' }}>
         <input type="time" value={newStart} onChange={(e) => setNewStart(e.target.value)} />
         <span className="small">→</span>
         <input type="time" value={newEnd} onChange={(e) => setNewEnd(e.target.value)} />
+        <div style={{ flex: 1, minWidth: 160 }}>
+          <AddressAutocomplete
+            value={newLieu}
+            onChange={(v) => { setNewLieu(v); setNewLieuLat(null); setNewLieuLng(null) }}
+            onSelect={(s) => { setNewLieu(s.display); setNewLieuLat(s.lat); setNewLieuLng(s.lng) }}
+            placeholder="Lieu (cabinet, domicile…)"
+          />
+        </div>
         <button className="secondary small-btn" onClick={add}>+ Ajouter</button>
       </div>
     </div>

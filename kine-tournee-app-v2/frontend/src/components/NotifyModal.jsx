@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useToast } from './Toast'
 
 // Formate un numéro français en format international pour WhatsApp
@@ -10,16 +10,37 @@ function toWhatsAppNumber(phone) {
   return digits.length >= 9 ? digits : null
 }
 
-function buildMessage(patientFirstName, visits, weekLabel, therapistName) {
+const MSG_TYPES = [
+  {
+    key: 'planning',
+    label: 'Planning semaine',
+    intro: (weekLabel) => `Voici vos séances de kinésithérapie pour la semaine du ${weekLabel} :`,
+  },
+  {
+    key: 'rappel',
+    label: 'Rappel',
+    intro: () => `Je vous rappelle vos prochaines séances de kinésithérapie :`,
+  },
+  {
+    key: 'modif',
+    label: 'Modification',
+    intro: (weekLabel) => `Voici votre planning modifié pour la semaine du ${weekLabel} :`,
+  },
+]
+
+function buildMessage(patientFirstName, visits, weekLabel, therapistName, msgType = 'planning') {
   const lines = visits.map((v) => {
     const date = new Date(v.date + 'T00:00:00')
     const dayLabel = date.toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long' })
     return `📅 ${dayLabel.charAt(0).toUpperCase() + dayLabel.slice(1)} : ${v.start_time.replace(':', 'h')} – ${v.end_time.replace(':', 'h')}`
   })
 
+  const typeConf = MSG_TYPES.find((t) => t.key === msgType) ?? MSG_TYPES[0]
+  const intro = typeConf.intro(weekLabel)
+
   return `Bonjour ${patientFirstName},
 
-Voici vos séances de kinésithérapie pour la semaine du ${weekLabel} :
+${intro}
 
 ${lines.join('\n')}
 
@@ -28,12 +49,18 @@ N'hésitez pas à me contacter en cas d'empêchement.
 ${therapistName || 'Votre kinésithérapeute'}`
 }
 
-function PatientNotifRow({ patient, visits, therapistName, weekLabel }) {
+function PatientNotifRow({ patient, visits, therapistName, weekLabel, msgType }) {
   const toast = useToast()
   const [open, setOpen] = useState(false)
 
-  const firstName = patient.full_name?.split(' ')[0] || patient.full_name || 'Bonjour'
-  const message = buildMessage(firstName, visits, weekLabel, therapistName)
+  const firstName = patient.sms_first_name || patient.full_name?.split(' ')[0] || patient.full_name || 'Bonjour'
+
+  // Message éditable — se réinitialise automatiquement quand le type global change
+  const [message, setMessage] = useState(() => buildMessage(firstName, visits, weekLabel, therapistName, msgType))
+  useEffect(() => {
+    setMessage(buildMessage(firstName, visits, weekLabel, therapistName, msgType))
+  }, [msgType]) // eslint-disable-line react-hooks/exhaustive-deps
+
   const waNumber = toWhatsAppNumber(patient.phone)
   const waUrl = waNumber ? `https://wa.me/${waNumber}?text=${encodeURIComponent(message)}` : null
   const mailUrl = patient.email
@@ -76,13 +103,34 @@ function PatientNotifRow({ patient, visits, therapistName, weekLabel }) {
         </div>
       </div>
       {open && (
-        <pre className="notif-preview">{message}</pre>
+        <div style={{ padding: '0 16px 12px' }}>
+          <textarea
+            value={message}
+            onChange={(e) => setMessage(e.target.value)}
+            rows={10}
+            style={{
+              width: '100%', boxSizing: 'border-box', fontFamily: 'inherit',
+              fontSize: 13, lineHeight: 1.5, padding: '8px 10px',
+              borderRadius: 6, border: '1px solid var(--border)',
+              resize: 'vertical', background: 'var(--surface2)',
+            }}
+          />
+          <button
+            className="secondary small-btn"
+            style={{ marginTop: 4 }}
+            onClick={() => setMessage(buildMessage(firstName, visits, weekLabel, therapistName, msgType))}
+          >
+            ↺ Réinitialiser
+          </button>
+        </div>
       )}
     </div>
   )
 }
 
 export default function NotifyModal({ schedule, patients, therapist, onClose }) {
+  const [msgType, setMsgType] = useState('planning')
+
   if (!schedule?.days) return null
 
   const weekLabel = new Date(schedule.week_start + 'T00:00:00')
@@ -97,7 +145,7 @@ export default function NotifyModal({ schedule, patients, therapist, onClose }) 
     }
   }
 
-  // Joindre avec les données patient (email, phone)
+  // Joindre avec les données patient (email, phone, sms_first_name)
   const rows = [...visitsByPatient.entries()].map(([patientId, visits]) => {
     const patient = patients.find((p) => p.id === patientId) || { full_name: visits[0].patient_name, id: patientId }
     return { patient, visits }
@@ -114,6 +162,22 @@ export default function NotifyModal({ schedule, patients, therapist, onClose }) 
           <button className="secondary small-btn" onClick={onClose}>✕</button>
         </div>
 
+        {/* Sélecteur de type de message global */}
+        <div style={{ padding: '10px 16px', background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
+          <div className="small" style={{ fontWeight: 600, marginBottom: 6 }}>Type de message</div>
+          <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+            {MSG_TYPES.map((t) => (
+              <button
+                key={t.key}
+                className={msgType === t.key ? 'primary small-btn' : 'secondary small-btn'}
+                onClick={() => setMsgType(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
         <div className="small muted" style={{ padding: '8px 16px', background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
           Cliquez sur <strong>WhatsApp</strong> pour ouvrir le message pré-rempli, <strong>Email</strong> pour ouvrir votre messagerie, ou <strong>Copier</strong> pour un SMS manuel.
         </div>
@@ -126,6 +190,7 @@ export default function NotifyModal({ schedule, patients, therapist, onClose }) 
               visits={visits}
               therapistName={therapist?.full_name || therapist?.name}
               weekLabel={weekLabel}
+              msgType={msgType}
             />
           ))}
         </div>

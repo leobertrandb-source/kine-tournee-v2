@@ -76,6 +76,7 @@ app.put('/api/patients/:id', async (req, res) => {
     full_name, address, lat, lng, phone, email, doctor_name,
     session_duration_min, sessions_per_week, active, availability,
     notes, is_fixed, prescription_sessions_total, prescription_sessions_done,
+    sms_first_name, tournee, time_preference,
   } = req.body
   const patch = {
     ...(full_name               !== undefined && { full_name, name: full_name }),
@@ -93,6 +94,9 @@ app.put('/api/patients/:id', async (req, res) => {
     ...(is_fixed                !== undefined && { is_fixed }),
     ...(prescription_sessions_total !== undefined && { prescription_sessions_total }),
     ...(prescription_sessions_done  !== undefined && { prescription_sessions_done }),
+    ...(sms_first_name          !== undefined && { sms_first_name }),
+    ...(tournee                 !== undefined && { tournee }),
+    ...(time_preference         !== undefined && { time_preference }),
   }
   const { data, error } = await req.db.from('patients').update(patch).eq('id', req.params.id).select().single()
   if (error) return res.status(400).json({ error: error.message })
@@ -181,18 +185,17 @@ app.post('/api/schedule/generate', async (req, res) => {
     req.db.from('therapist_profile').select('*').eq('user_id', req.userId).maybeSingle(),
     req.db.from('therapist_day_config').select('*').eq('user_id', req.userId).order('day_index'),
     req.db.from('patients').select('*').eq('active', true),
-    req.db.from('patient_absences').select('patient_id,absence_date').gte('absence_date', weekStart).lte('absence_date', weekEnd),
+    req.db.from('patient_absences').select('patient_id,absence_date,start_time,end_time').gte('absence_date', weekStart).lte('absence_date', weekEnd),
   ])
   if (e1 || e2 || e3 || e4) return res.status(500).json({ error: e1?.message || e2?.message || e3?.message || e4?.message })
 
   try {
     const weeklyConfig = Object.fromEntries((weeklyRows ?? []).map((r) => [r.day_key, r]))
-    const absentSet = new Set((absences ?? []).map((a) => `${a.patient_id}|${a.absence_date}`))
     const schedule = await generateSchedule({
       weekStart, therapist, weeklyConfig, patients: patients ?? [],
       travelBuffer: therapist?.travel_buffer_min ?? 10,
       sessionBuffer: therapist?.session_buffer_min ?? 5,
-      absentSet,
+      absences: absences ?? [],
     })
     const { error: insertError } = await req.db.from('generated_schedules')
       .insert({ week_start: weekStart, payload: schedule, user_id: req.userId })
