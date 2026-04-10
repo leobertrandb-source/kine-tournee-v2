@@ -119,14 +119,6 @@ export default function SettingsPage({ therapist, setTherapist, weeklyConfig, se
                 placeholder="Votre cabinet, domicile…"
               />
             </label>
-            <div className="grid grid-2">
-              <label>Lat départ
-                <input type="number" step="any" value={therapist?.default_start_lat || ''} onChange={(e) => setTherapist({ ...therapist, default_start_lat: Number(e.target.value) })} placeholder="48.8566" />
-              </label>
-              <label>Lng départ
-                <input type="number" step="any" value={therapist?.default_start_lng || ''} onChange={(e) => setTherapist({ ...therapist, default_start_lng: Number(e.target.value) })} placeholder="2.3522" />
-              </label>
-            </div>
           </div>
           <div className="grid">
             <label>Adresse d'arrivée par défaut
@@ -137,14 +129,6 @@ export default function SettingsPage({ therapist, setTherapist, weeklyConfig, se
                 placeholder="Votre cabinet, domicile…"
               />
             </label>
-            <div className="grid grid-2">
-              <label>Lat arrivée
-                <input type="number" step="any" value={therapist?.default_end_lat || ''} onChange={(e) => setTherapist({ ...therapist, default_end_lat: Number(e.target.value) })} placeholder="48.8566" />
-              </label>
-              <label>Lng arrivée
-                <input type="number" step="any" value={therapist?.default_end_lng || ''} onChange={(e) => setTherapist({ ...therapist, default_end_lng: Number(e.target.value) })} placeholder="2.3522" />
-              </label>
-            </div>
             <div className="grid grid-2">
               <label>Buffer trajet (min)
                 <input

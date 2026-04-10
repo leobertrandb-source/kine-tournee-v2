@@ -21,8 +21,8 @@ function Avatar({ name, size = 40 }) {
 }
 
 const EMPTY = {
-  full_name: '', address: '', lat: '', lng: '', phone: '', email: '', doctor_name: '',
-  prescription_sessions_total: '', prescription_sessions_done: '',
+  full_name: '', address: '', lat: '', lng: '', phone: '', email: '',
+  sms_name: '', time_preference: 'any',
   session_duration_min: 30, sessions_per_week: 2, is_fixed: false, active: true,
   notes: '', availability: {},
 }
@@ -245,13 +245,6 @@ export default function PatientsPage({ patients, setPatients }) {
     (p.address || '').toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  const prescriptionAlert = (p) => {
-    if (!p.prescription_sessions_total) return null
-    const remaining = p.prescription_sessions_total - (p.prescription_sessions_done ?? 0)
-    if (remaining <= 3) return remaining <= 0 ? 'épuisé' : `⚠ ${remaining} restante(s)`
-    return null
-  }
-
   return (
     <div className="grid grid-2" style={{ alignItems: 'start' }}>
       <Modal open={!!deleteModal} title="Supprimer le patient" danger
@@ -269,9 +262,14 @@ export default function PatientsPage({ patients, setPatients }) {
             <label>Nom complet *<input value={form.full_name} onChange={(e) => setField('full_name', e.target.value)} required /></label>
             <label>Téléphone<input value={form.phone} onChange={(e) => setField('phone', e.target.value)} placeholder="06 XX XX XX XX" /></label>
           </div>
-          <label>Email (pour les notifications)
-            <input type="email" value={form.email || ''} onChange={(e) => setField('email', e.target.value)} placeholder="patient@email.fr" />
-          </label>
+          <div className="grid grid-2">
+            <label>Prénom pour les SMS
+              <input value={form.sms_name || ''} onChange={(e) => setField('sms_name', e.target.value)} placeholder="Prénom affiché dans les messages" />
+            </label>
+            <label>Email (notifications)
+              <input type="email" value={form.email || ''} onChange={(e) => setField('email', e.target.value)} placeholder="patient@email.fr" />
+            </label>
+          </div>
           <label>Adresse *
             <AddressAutocomplete
               value={form.address}
@@ -283,26 +281,30 @@ export default function PatientsPage({ patients, setPatients }) {
               }}
             />
           </label>
-          <div className="grid grid-2">
-            <label>Latitude<input value={form.lat} onChange={(e) => setField('lat', e.target.value)} placeholder="48.8566" /></label>
-            <label>Longitude<input value={form.lng} onChange={(e) => setField('lng', e.target.value)} placeholder="2.3522" /></label>
-          </div>
-          <div className="grid grid-2">
-            <label>Médecin prescripteur<input value={form.doctor_name} onChange={(e) => setField('doctor_name', e.target.value)} /></label>
-            <label>Séances prescrites<input type="number" min="0" value={form.prescription_sessions_total} onChange={(e) => setField('prescription_sessions_total', e.target.value)} placeholder="ex: 30" /></label>
-          </div>
-          {editingId && (
-            <label>Séances effectuées<input type="number" min="0" value={form.prescription_sessions_done} onChange={(e) => setField('prescription_sessions_done', e.target.value)} /></label>
+          {/* lat/lng stockés mais masqués — remplis automatiquement par l'autocomplétion */}
+          <input type="hidden" value={form.lat} readOnly />
+          <input type="hidden" value={form.lng} readOnly />
+          {(!form.lat || !form.lng) && form.address && (
+            <div className="address-imprecise-warn">📍 Adresse non géolocalisée — sélectionnez une suggestion dans la liste.</div>
           )}
           <div className="grid grid-2">
             <label>Durée séance (min)<input type="number" min="5" max="120" value={form.session_duration_min} onChange={(e) => setField('session_duration_min', Number(e.target.value))} /></label>
-            <label>Séances / semaine<input type="number" min="1" max="14" value={form.sessions_per_week} onChange={(e) => setField('sessions_per_week', Number(e.target.value))} /></label>
+            <label>Séances / semaine<input type="number" min="1" max="7" value={form.sessions_per_week} onChange={(e) => setField('sessions_per_week', Number(e.target.value))} /></label>
           </div>
-          <div className="row">
-            <label className="checkbox-label"><input type="checkbox" checked={form.is_fixed} onChange={(e) => setField('is_fixed', e.target.checked)} />Créneau fixe</label>
-            <label className="checkbox-label"><input type="checkbox" checked={form.active} onChange={(e) => setField('active', e.target.checked)} />Actif</label>
+          <div className="grid grid-2">
+            <label>Préférence horaire
+              <select value={form.time_preference || 'any'} onChange={(e) => setField('time_preference', e.target.value)}>
+                <option value="any">Indifférent</option>
+                <option value="morning">Matin de préférence</option>
+                <option value="afternoon">Après-midi de préférence</option>
+              </select>
+            </label>
+            <div className="grid" style={{ gap: 8, alignContent: 'end' }}>
+              <label className="checkbox-label"><input type="checkbox" checked={form.is_fixed} onChange={(e) => setField('is_fixed', e.target.checked)} />Créneau fixe</label>
+              <label className="checkbox-label"><input type="checkbox" checked={form.active} onChange={(e) => setField('active', e.target.checked)} />Actif</label>
+            </div>
           </div>
-          <label>Notes<textarea value={form.notes} onChange={(e) => setField('notes', e.target.value)} rows={2} placeholder="Pathologie, accès, code porte…" /></label>
+          <label>Notes<textarea value={form.notes} onChange={(e) => setField('notes', e.target.value)} rows={2} placeholder="Accès, code porte, pathologie…" /></label>
           <button type="button" className="secondary" onClick={() => setShowAvail((v) => !v)} style={{ width: '100%' }}>
             {showAvail ? '▲ Masquer indisponibilités' : '▼ Indisponibilités du patient'}
           </button>
@@ -335,14 +337,12 @@ export default function PatientsPage({ patients, setPatients }) {
                       <strong>{p.full_name}</strong>
                       {p.is_fixed && <span className="badge badge-fixed badge-xs">Fixe</span>}
                       {!p.active && <span className="badge badge-inactive badge-xs">Inactif</span>}
-                      {alert && <span className={`badge badge-xs ${alert === 'épuisé' ? 'badge-red' : 'badge-orange'}`}>{alert}</span>}
                       {(!p.lat || !p.lng) && <span className="badge badge-xs badge-orange" title="Pas de coordonnées GPS — invisible sur la carte">📍 sans GPS</span>}
                     </div>
                     <div className="small muted">{p.address}</div>
                     {p.phone && <div className="small muted">{p.phone}</div>}
-                    {p.doctor_name && <div className="small muted">Dr {p.doctor_name}</div>}
                     <div className="small muted">{p.sessions_per_week}×/semaine · {p.session_duration_min} min
-                      {p.prescription_sessions_total ? ` · ${p.prescription_sessions_done ?? 0}/${p.prescription_sessions_total} séances` : ''}
+                      {p.time_preference === 'morning' ? ' · matin' : p.time_preference === 'afternoon' ? ' · après-midi' : ''}
                     </div>
                   </div>
                   <div className="row" style={{ gap: 4, flexShrink: 0 }}>

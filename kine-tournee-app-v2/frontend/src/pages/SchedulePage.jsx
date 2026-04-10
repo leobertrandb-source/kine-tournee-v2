@@ -26,6 +26,25 @@ function parseMin(t) {
   return h * 60 + m
 }
 
+function fmtMin(m) {
+  return `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+}
+
+/**
+ * Recalcule les horaires après un réordonnancement DnD.
+ * Les estimated_travel_min sont conservés tels quels (approximation).
+ */
+function recalcTimes(visits, workStart, sessionBuffer = 5) {
+  let current = parseMin(workStart)
+  return visits.map((v) => {
+    const travel = v.estimated_travel_min ?? 10
+    const start  = current + travel
+    const end    = start + (v.session_duration_min ?? 30)
+    current = end + sessionBuffer
+    return { ...v, start_time: fmtMin(start), end_time: fmtMin(end) }
+  })
+}
+
 // ── Carte Leaflet ─────────────────────────────────────────────────────────────
 function DayMap({ day, startLat, startLng, endLat, endLng, userPosition }) {
   const mapRef = useRef(null)
@@ -133,6 +152,7 @@ function TimelineView({ day, completions, onCompletionToggle, dayStart = '08:00'
 // ── Vue tableau ───────────────────────────────────────────────────────────────
 function TableView({ day, completions, onCompletionToggle, onVisitsReorder }) {
   const [dragFrom, setDragFrom] = useState(null)
+  const [dragOver, setDragOver] = useState(null)
   return (
     <div className="table-scroll">
       <table>
@@ -154,10 +174,11 @@ function TableView({ day, completions, onCompletionToggle, onVisitsReorder }) {
             return (
               <tr
                 key={`${visit.patient_id}-${visit.start_time}`}
-                className={`visit-row ${isDone ? 'visit-row--done' : ''} ${visit.is_fixed ? 'visit-row--fixed' : ''}`}
+                className={`visit-row ${isDone ? 'visit-row--done' : ''} ${visit.is_fixed ? 'visit-row--fixed' : ''} ${dragOver === i && dragFrom !== i ? 'visit-row--drag-over' : ''} ${dragFrom === i ? 'visit-row--dragging' : ''}`}
                 draggable
-                onDragStart={() => setDragFrom(i)}
-                onDragOver={(e) => e.preventDefault()}
+                onDragStart={() => { setDragFrom(i); setDragOver(null) }}
+                onDragOver={(e) => { e.preventDefault(); setDragOver(i) }}
+                onDragEnd={() => { setDragFrom(null); setDragOver(null) }}
                 onDrop={() => {
                   if (dragFrom === null || dragFrom === i) return
                   const nv = [...day.visits]
@@ -165,6 +186,7 @@ function TableView({ day, completions, onCompletionToggle, onVisitsReorder }) {
                   nv.splice(i, 0, m)
                   onVisitsReorder(day.day, nv)
                   setDragFrom(null)
+                  setDragOver(null)
                 }}
               >
                 <td className="drag-handle">⠿</td>
@@ -344,11 +366,26 @@ export default function SchedulePage({ schedule, setSchedule, weekStart, setWeek
   }
 
   function handleVisitsReorder(dayKey, newVisits) {
-    setSchedule((prev) => ({
-      ...prev,
-      days: prev.days.map((d) => d.day === dayKey ? { ...d, visits: newVisits } : d),
-    }))
+    // Recalculer les horaires selon le nouvel ordre
+    const dayConfig = weeklyConfig?.[dayKey]
+    const workStart = dayConfig?.work_start ?? '08:00'
+    const sessionBuffer = therapist?.session_buffer_min ?? 5
+    const recalculated = recalcTimes(newVisits, workStart, sessionBuffer)
+
+    setSchedule((prev) => {
+      const updated = {
+        ...prev,
+        days: prev.days.map((d) => d.day === dayKey ? { ...d, visits: recalculated } : d),
+      }
+      // Auto-save avec debounce
+      clearTimeout(handleVisitsReorder._timer)
+      handleVisitsReorder._timer = setTimeout(() => {
+        api.saveSchedule(prev.week_start, updated).catch(() => {})
+      }, 1500)
+      return updated
+    })
   }
+  handleVisitsReorder._timer = null
 
   async function handleSaveManual() {
     if (!schedule) return

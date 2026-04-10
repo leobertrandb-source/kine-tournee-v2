@@ -102,7 +102,8 @@ function isInsideBlocked(timeStart, timeEnd, blockedWindows) {
  * Retourne un Map : patientId → [dayKey, ...]
  */
 function preAssignDays(patients, enabledDays, absentSet) {
-  const assignments = new Map()
+  const assignments  = new Map()
+  const patternCount = new Map() // équilibrage : pattern → nb patients
 
   for (const patient of patients) {
     if (!patient.active) { assignments.set(patient.id, []); continue }
@@ -120,24 +121,33 @@ function preAssignDays(patients, enabledDays, absentSet) {
 
     if (!availableDays.length) { assignments.set(patient.id, []); continue }
 
-    // Sélection gloutonne : n jours avec écart ≥ 2 entre chaque
-    function pickWithGap(remaining, minDow, chosen) {
-      if (remaining === 0) return chosen
+    // Trouve tous les patterns valides (écart ≥ 2 entre chaque jour)
+    function findPatterns(remaining, minDow, chosen) {
+      if (remaining === 0) return [chosen]
+      const results = []
       for (const day of availableDays) {
         if (day.dow >= minDow) {
-          const result = pickWithGap(remaining - 1, day.dow + 2, [...chosen, day.key])
-          if (result) return result
+          results.push(...findPatterns(remaining - 1, day.dow + 2, [...chosen, day.key]))
         }
       }
-      return null
+      return results
     }
 
-    let picked = pickWithGap(n, 1, [])
+    const patterns = findPatterns(n, 1, [])
 
-    // Fallback si impossible de respecter l'écart (ex: seulement 2 jours activés
-    // et patient 3x/sem) → on prend ce qu'on peut avec écart maximal possible
-    if (!picked) {
-      picked = pickWithGap(Math.min(n, availableDays.length), 1, [])
+    let picked
+    if (patterns.length) {
+      // Choisir le pattern le moins utilisé → équilibre Tournée A (Lun+Mer) / Tournée B (Mar+Jeu)
+      let minCount = Infinity
+      for (const p of patterns) {
+        const k = p.join(',')
+        const c = patternCount.get(k) ?? 0
+        if (c < minCount) { minCount = c; picked = p }
+      }
+      patternCount.set(picked.join(','), (patternCount.get(picked.join(',')) ?? 0) + 1)
+    } else {
+      // Fallback : prendre ce qu'on peut avec l'écart le plus grand possible
+      picked = findPatterns(Math.min(n, availableDays.length), 1, [])[0]
         ?? availableDays.slice(0, n).map((d) => d.key)
     }
 
@@ -228,11 +238,14 @@ export async function generateSchedule({
     const visits    = []
     const maxVisits = Number(dayConfig.max_visits ?? 20)
 
-    // Patients assignés à ce jour, fixes en premier
+    // Patients assignés à ce jour :
+    // 1. Fixes en premier
+    // 2. Préférence matin (morning) avant indifférent avant après-midi (afternoon)
+    const prefOrder = { morning: 0, any: 1, afternoon: 2 }
     const todayPatients = (patientsByDay.get(day.key) ?? []).sort((a, b) => {
       if (a.is_fixed && !b.is_fixed) return -1
       if (!a.is_fixed && b.is_fixed) return 1
-      return 0
+      return (prefOrder[a.time_preference ?? 'any'] ?? 1) - (prefOrder[b.time_preference ?? 'any'] ?? 1)
     })
 
     // Ensemble des patients déjà planifiés ce jour (anti-doublon)
