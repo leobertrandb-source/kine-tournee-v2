@@ -87,6 +87,103 @@ function isInsideBlocked(timeStart, timeEnd, blockedWindows) {
   return blockedWindows.some((b) => !(timeEnd <= b.start || timeStart >= b.end))
 }
 
+/**
+ * Minutes disponibles dans la journée pour un patient, après soustraction de
+ * toutes les plages bloquées (thérapeute + patient). Sert à trier les patients
+ * les plus contraints en tête de tournée.
+ */
+function availableMinutesInDay(dayStart, dayEnd, therapistBlocked, patientBlockedWindows) {
+  const patientBlocked = normalizeWindows(patientBlockedWindows)
+  const allBlocked = [...therapistBlocked, ...patientBlocked]
+  let available = dayEnd - dayStart
+  for (const b of allBlocked) {
+    const s = Math.max(b.start, dayStart)
+    const e = Math.min(b.end, dayEnd)
+    if (e > s) available -= (e - s)
+  }
+  return Math.max(0, available)
+}
+
+/**
+ * Évalue un ordre de visite : retourne { totalTravel, schedule } si faisable,
+ * null sinon. Saute automatiquement les plages bloquées thérapeute.
+ */
+function computeRouteOrder(orderedPatients, { startLat, startLng, dayStart, dayEnd, dayKey, dayDate, therapistBlocked, partialAbsenceMap, travel, travelBuffer, sessionBuffer }) {
+  let t = dayStart
+  let lat = startLat
+  let lng = startLng
+  let totalTravel = 0
+  const schedule = []
+
+  for (const p of orderedPatients) {
+    const { minutes: travelMin, km: travelKm } = travel(lat, lng, p.lat, p.lng)
+    const duration = Number(p.session_duration_min ?? 30)
+    let visitStart = t + travelMin + travelBuffer
+    let visitEnd = visitStart + duration
+
+    // Sauter les plages bloquées thérapeute (plusieurs passages possibles)
+    for (let iter = 0; iter < therapistBlocked.length + 1; iter++) {
+      const overlap = therapistBlocked.find((b) => visitStart < b.end && visitEnd > b.start)
+      if (!overlap) break
+      visitStart = overlap.end
+      visitEnd = visitStart + duration
+    }
+
+    if (visitEnd > dayEnd) return null
+
+    const patientBlocked = normalizeWindows((p.availability?.[dayKey] ?? {}).blocked_windows)
+    if (isInsideBlocked(visitStart, visitEnd, patientBlocked)) return null
+
+    const partialAbsence = partialAbsenceMap.get(`${p.id}|${dayDate}`) ?? []
+    if (partialAbsence.length && isInsideBlocked(visitStart, visitEnd, partialAbsence)) return null
+
+    totalTravel += travelMin
+    schedule.push({ patient: p, visitStart, visitEnd, travelMin, travelKm })
+    lat = p.lat
+    lng = p.lng
+    t = visitEnd + sessionBuffer
+  }
+
+  return { totalTravel, schedule }
+}
+
+/**
+ * Améliore l'ordre des visites par l'algorithme 2-opt :
+ * pour chaque paire d'arêtes, inverse le segment si cela réduit le trajet
+ * total et reste faisable. Les patients is_fixed ne sont pas déplacés.
+ */
+function twoOptImprove(patients, ctx) {
+  if (patients.length < 3) return patients
+  const fixedCount = patients.filter((p) => p.is_fixed).length
+
+  let best = [...patients]
+  let bestResult = computeRouteOrder(best, ctx)
+  if (!bestResult) return patients
+
+  let improved = true
+  while (improved) {
+    improved = false
+    outer: for (let i = fixedCount; i < best.length - 1; i++) {
+      for (let j = i + 1; j < best.length; j++) {
+        const candidate = [
+          ...best.slice(0, i),
+          ...best.slice(i, j + 1).reverse(),
+          ...best.slice(j + 1),
+        ]
+        const r = computeRouteOrder(candidate, ctx)
+        if (r && r.totalTravel < bestResult.totalTravel) {
+          best = candidate
+          bestResult = r
+          improved = true
+          break outer
+        }
+      }
+    }
+  }
+
+  return best
+}
+
 const TOURNEE_A = ['monday', 'wednesday']
 const TOURNEE_B = ['tuesday', 'thursday']
 
@@ -338,17 +435,20 @@ export async function generateSchedule({
     const dayEnd   = parseMinutes(dayConfig.work_end)
     const therapistBlocked = normalizeWindows(dayConfig.blocked_windows)
 
+    const dayStartLat = dayConfig.start_lat ?? therapist?.default_start_lat
+    const dayStartLng = dayConfig.start_lng ?? therapist?.default_start_lng
     let currentTime = dayStart
-    let currentLat  = dayConfig.start_lat ?? therapist?.default_start_lat
-    let currentLng  = dayConfig.start_lng ?? therapist?.default_start_lng
+    let currentLat  = dayStartLat
+    let currentLng  = dayStartLng
     const visits    = []
     const maxVisits = Number(dayConfig.max_visits ?? 20)
 
-    // Patients assignés à ce jour, fixes en premier
+    // Patients assignés à ce jour : fixes en premier, puis les plus contraints (fenêtre dispo étroite)
     const todayPatients = (patientsByDay.get(day.key) ?? []).sort((a, b) => {
-      if (a.is_fixed && !b.is_fixed) return -1
-      if (!a.is_fixed && b.is_fixed) return 1
-      return 0
+      if (a.is_fixed !== b.is_fixed) return a.is_fixed ? -1 : 1
+      const flexA = availableMinutesInDay(dayStart, dayEnd, therapistBlocked, (a.availability?.[day.key] ?? {}).blocked_windows)
+      const flexB = availableMinutesInDay(dayStart, dayEnd, therapistBlocked, (b.availability?.[day.key] ?? {}).blocked_windows)
+      return flexA - flexB
     })
 
     // Ensemble des patients déjà planifiés ce jour (anti-doublon)
@@ -419,6 +519,43 @@ export async function generateSchedule({
       currentTime = visitEnd + sessionBuffer
       currentLat  = chosen.lat
       currentLng  = chosen.lng
+    }
+
+    // ── Optimisation 2-opt de l'ordre des visites ──────────────────────────
+    if (visits.length >= 3) {
+      const patientById = new Map(patients.map((p) => [p.id, p]))
+      const greedyPatients = visits.map((v) => patientById.get(v.patient_id)).filter(Boolean)
+      const routeCtx = {
+        startLat: dayStartLat, startLng: dayStartLng,
+        dayStart, dayEnd, dayKey: day.key, dayDate: day.date,
+        therapistBlocked, partialAbsenceMap,
+        travel, travelBuffer, sessionBuffer,
+      }
+      const optimized = twoOptImprove(greedyPatients, routeCtx)
+      if (optimized.some((p, i) => p.id !== greedyPatients[i].id)) {
+        const rebuilt = computeRouteOrder(optimized, routeCtx)
+        if (rebuilt) {
+          visits.length = 0
+          for (const { patient: p, visitStart, visitEnd, travelMin, travelKm } of rebuilt.schedule) {
+            visits.push({
+              patient_id:           p.id,
+              patient_name:         p.full_name,
+              address:              p.address,
+              lat:                  p.lat,
+              lng:                  p.lng,
+              start_time:           formatMinutes(visitStart),
+              end_time:             formatMinutes(visitEnd),
+              session_duration_min: Number(p.session_duration_min ?? 30),
+              estimated_travel_min: travelMin + travelBuffer,
+              estimated_km:         travelKm,
+              is_fixed:             p.is_fixed ?? false,
+              done:                 false,
+            })
+          }
+          currentLat = optimized[optimized.length - 1].lat
+          currentLng = optimized[optimized.length - 1].lng
+        }
+      }
     }
 
     // Retour
