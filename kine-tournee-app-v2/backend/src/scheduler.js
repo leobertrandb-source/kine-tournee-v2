@@ -112,7 +112,12 @@ function isInsideBlocked(timeStart, timeEnd, blockedWindows) {
 /**
  * Clustering k-means géographique à 2 zones.
  * Initialise les centroides sur les adresses de départ des tournées A et B,
- * puis itère jusqu'à convergence pour obtenir des zones cohérentes.
+ * puis itère jusqu'à convergence pour obtenir des zones cohérentes sans
+ * traversée inutile de secteurs.
+ *
+ * @param   patients  - patients avec lat/lng
+ * @param   centerA   - {lat, lng} départ tournée A (lundi)
+ * @param   centerB   - {lat, lng} départ tournée B (mardi)
  * @returns Map<patientId, 0|1>  — 0 = zone A, 1 = zone B
  */
 function kmeansZones(patients, centerA, centerB, maxIter = 10) {
@@ -137,6 +142,7 @@ function kmeansZones(patients, centerA, centerB, maxIter = 10) {
       clusters[zone].push(p)
     }
 
+    // Convergence ?
     let changed = false
     for (const [id, zone] of next) {
       if (assignments.get(id) !== zone) { changed = true; break }
@@ -144,6 +150,7 @@ function kmeansZones(patients, centerA, centerB, maxIter = 10) {
     assignments = next
     if (!changed) break
 
+    // Recalculer les centroides (conserver l'ancien si cluster vide)
     for (let i = 0; i < 2; i++) {
       if (clusters[i].length > 0) {
         centers[i] = {
@@ -163,8 +170,9 @@ function kmeansZones(patients, centerA, centerB, maxIter = 10) {
  * Règles :
  *  - Respecte sessions_per_week avec écart ≥ 2 jours
  *  - Tournée explicite (patient.tournee = 'A' ou 'B') : préfère Lun+Mer ou Mar+Jeu
- *  - Tournée automatique (2x/sem) : zones k-means depuis les départs A et B
- *    → fallback round-robin si coordonnées manquantes
+ *  - Tournée automatique (2x/sem) : assignation géographique (proximité départ tournée A vs B)
+ *    → fallback round-robin si coordonnées manquantes ou identiques
+ *  - 3x/sem : Lun+Mer+Ven de préférence
  *
  * @param startLocByDay - { monday:{lat,lng}, tuesday:{lat,lng}, … }
  */
@@ -179,6 +187,7 @@ function preAssignDays(patients, enabledDays, absentSet, startLocByDay = {}) {
     (aLoc.lat !== bLoc.lat || aLoc.lng !== bLoc.lng)
   )
 
+  // Pré-calculer les zones k-means pour les patients auto 2x/sem avec coordonnées
   const autoPatients2x = patients.filter(
     (p) => p.active && !p.tournee && Number(p.sessions_per_week ?? 1) === 2 && p.lat && p.lng
   )
@@ -251,7 +260,7 @@ function preAssignDays(patients, enabledDays, absentSet, startLocByDay = {}) {
  * @param {Array}  params.patients
  * @param {number} params.travelBuffer
  * @param {number} params.sessionBuffer
- * @param {Set}    params.absentSet        Set de clés "${patientId}|${date}"
+ * @param {Array}  params.absences         [{patient_id, absence_date, start_time?, end_time?}]
  */
 export async function generateSchedule({
   weekStart,
@@ -260,10 +269,28 @@ export async function generateSchedule({
   patients,
   travelBuffer = 10,
   sessionBuffer = 5,
-  absentSet = new Set(),
+  absences = [],
 }) {
   const days = getDayDates(weekStart)
   const enabledDays = days.filter((d) => weeklyConfig[d.key]?.enabled)
+
+  // ── Traitement des absences ───────────────────────────────────────────────
+  // fullDayAbsenceSet : "patientId|date" → exclure entièrement le patient ce jour
+  // partialAbsenceMap : "patientId|date" → [{start, end}] → fenêtre bloquée uniquement
+  const fullDayAbsenceSet = new Set()
+  const partialAbsenceMap = new Map()
+  for (const a of absences) {
+    const key = `${a.patient_id}|${a.absence_date}`
+    if (a.start_time && a.end_time) {
+      if (!partialAbsenceMap.has(key)) partialAbsenceMap.set(key, [])
+      partialAbsenceMap.get(key).push({
+        start: parseMinutes(a.start_time),
+        end:   parseMinutes(a.end_time),
+      })
+    } else {
+      fullDayAbsenceSet.add(key)
+    }
+  }
 
   // ── Construire la matrice OSRM ──────────────────────────────────────────────
   const allLocations = []
@@ -304,7 +331,7 @@ export async function generateSchedule({
   })
 
   // ── Pré-assignation des patients aux jours (règle 48h + géographie) ─────────
-  const dayAssignments = preAssignDays(patients, enabledDays, absentSet, startLocByDay)
+  const dayAssignments = preAssignDays(patients, enabledDays, fullDayAbsenceSet, startLocByDay)
 
   // Index inverse : dayKey → [patients assignés ce jour]
   const patientsByDay = new Map(days.map((d) => [d.key, []]))
@@ -366,6 +393,9 @@ export async function generateSchedule({
 
         const patientBlocked = normalizeWindows((p.availability?.[day.key] ?? {}).blocked_windows)
         if (isInsideBlocked(startVisit, endVisit, patientBlocked)) return false
+
+        const partialAbsence = partialAbsenceMap.get(`${p.id}|${day.date}`) ?? []
+        if (partialAbsence.length && isInsideBlocked(startVisit, endVisit, partialAbsence)) return false
 
         return true
       })

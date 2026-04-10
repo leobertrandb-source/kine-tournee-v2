@@ -243,7 +243,7 @@ function preAssignDays(patients, enabledDays, absentSet, startLocByDay = {}) {
  * @param {Array}  params.patients
  * @param {number} params.travelBuffer
  * @param {number} params.sessionBuffer
- * @param {Set}    params.absentSet
+ * @param {Array}  params.absences         [{patient_id, absence_date, start_time?, end_time?}]
  */
 export async function generateSchedule({
   weekStart,
@@ -252,10 +252,28 @@ export async function generateSchedule({
   patients,
   travelBuffer = 10,
   sessionBuffer = 5,
-  absentSet = new Set(),
+  absences = [],
 }) {
   const days = getDayDates(weekStart)
   const enabledDays = days.filter((d) => weeklyConfig[d.key]?.enabled)
+
+  // ── Traitement des absences ───────────────────────────────────────────────
+  // fullDayAbsenceSet : "patientId|date" → exclure entièrement le patient ce jour
+  // partialAbsenceMap : "patientId|date" → [{start, end}] → fenêtre bloquée uniquement
+  const fullDayAbsenceSet = new Set()
+  const partialAbsenceMap = new Map()
+  for (const a of absences) {
+    const key = `${a.patient_id}|${a.absence_date}`
+    if (a.start_time && a.end_time) {
+      if (!partialAbsenceMap.has(key)) partialAbsenceMap.set(key, [])
+      partialAbsenceMap.get(key).push({
+        start: parseMinutes(a.start_time),
+        end:   parseMinutes(a.end_time),
+      })
+    } else {
+      fullDayAbsenceSet.add(key)
+    }
+  }
 
   // ── Matrice OSRM ──────────────────────────────────────────────────────────
   const allLocations = []
@@ -291,7 +309,7 @@ export async function generateSchedule({
   })
 
   // ── Pré-assignation des patients aux jours (règle 48h + géographie) ───────
-  const dayAssignments = preAssignDays(patients, enabledDays, absentSet, startLocByDay)
+  const dayAssignments = preAssignDays(patients, enabledDays, fullDayAbsenceSet, startLocByDay)
 
   // Index inverse : dayKey → [patients assignés ce jour]
   const patientsByDay = new Map(days.map((d) => [d.key, []]))
@@ -350,6 +368,9 @@ export async function generateSchedule({
 
         const patientBlocked = normalizeWindows((p.availability?.[day.key] ?? {}).blocked_windows)
         if (isInsideBlocked(startVisit, endVisit, patientBlocked)) return false
+
+        const partialAbsence = partialAbsenceMap.get(`${p.id}|${day.date}`) ?? []
+        if (partialAbsence.length && isInsideBlocked(startVisit, endVisit, partialAbsence)) return false
 
         return true
       })
