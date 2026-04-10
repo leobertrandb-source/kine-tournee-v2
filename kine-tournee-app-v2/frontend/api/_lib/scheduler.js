@@ -171,7 +171,7 @@ function twoOptImprove(patients, ctx) {
           ...best.slice(j + 1),
         ]
         const r = computeRouteOrder(candidate, ctx)
-        if (r && r.totalTravel < bestResult.totalTravel) {
+        if (r && r.totalTravel < bestResult.totalTravel - 0.5) {
           best = candidate
           bestResult = r
           improved = true
@@ -181,6 +181,72 @@ function twoOptImprove(patients, ctx) {
     }
   }
 
+  return best
+}
+
+/**
+ * Or-opt : déplace chaque patient non-fixe à la meilleure position de la route.
+ * Complémentaire au 2-opt — capture les "détours" sur des patients isolés que
+ * le 2-opt ne peut pas corriger en inversant des segments.
+ */
+function orOptImprove(patients, ctx) {
+  if (patients.length < 3) return patients
+  const fixedCount = patients.filter((p) => p.is_fixed).length
+
+  let best = [...patients]
+  let bestResult = computeRouteOrder(best, ctx)
+  if (!bestResult) return patients
+
+  let improved = true
+  while (improved) {
+    improved = false
+    for (let i = fixedCount; i < best.length && !improved; i++) {
+      const node = best[i]
+      const rest = best.filter((_, idx) => idx !== i)
+      for (let j = 0; j <= rest.length && !improved; j++) {
+        if (j === i) continue
+        const candidate = [...rest.slice(0, j), node, ...rest.slice(j)]
+        const r = computeRouteOrder(candidate, ctx)
+        if (r && r.totalTravel < bestResult.totalTravel - 0.5) {
+          best = candidate
+          bestResult = r
+          improved = true
+        }
+      }
+    }
+  }
+  return best
+}
+
+/**
+ * Or-opt-2 : déplace des paires de patients consécutifs à la meilleure position.
+ * Utile quand deux patients adjacents forment un détour qu'or-opt ne détecte pas.
+ */
+function orOpt2Improve(patients, ctx) {
+  if (patients.length < 4) return patients
+  const fixedCount = patients.filter((p) => p.is_fixed).length
+
+  let best = [...patients]
+  let bestResult = computeRouteOrder(best, ctx)
+  if (!bestResult) return patients
+
+  let improved = true
+  while (improved) {
+    improved = false
+    for (let i = fixedCount; i < best.length - 1 && !improved; i++) {
+      const pair = [best[i], best[i + 1]]
+      const rest = best.filter((_, idx) => idx !== i && idx !== i + 1)
+      for (let j = 0; j <= rest.length && !improved; j++) {
+        const candidate = [...rest.slice(0, j), ...pair, ...rest.slice(j)]
+        const r = computeRouteOrder(candidate, ctx)
+        if (r && r.totalTravel < bestResult.totalTravel - 0.5) {
+          best = candidate
+          bestResult = r
+          improved = true
+        }
+      }
+    }
+  }
   return best
 }
 
@@ -526,7 +592,7 @@ export async function generateSchedule({
       currentLng  = chosen.lng
     }
 
-    // ── Optimisation 2-opt de l'ordre des visites ──────────────────────────
+    // ── Optimisation de l'ordre des visites : 2-opt → or-opt → or-opt-2 ───────
     if (visits.length >= 3) {
       const patientById = new Map(patients.map((p) => [p.id, p]))
       const greedyPatients = visits.map((v) => patientById.get(v.patient_id)).filter(Boolean)
@@ -536,7 +602,13 @@ export async function generateSchedule({
         therapistBlocked, partialAbsenceMap,
         travel, travelBuffer, sessionBuffer,
       }
-      const optimized = twoOptImprove(greedyPatients, routeCtx)
+      // Chaîne d'optimisation : 2-opt (échanges de segments) → or-opt (relocation
+      // de noeuds isolés) → or-opt-2 (relocation de paires) → 2-opt final
+      let optimized = twoOptImprove(greedyPatients, routeCtx)
+      optimized = orOptImprove(optimized, routeCtx)
+      optimized = orOpt2Improve(optimized, routeCtx)
+      optimized = twoOptImprove(optimized, routeCtx) // passe finale
+
       if (optimized.some((p, i) => p.id !== greedyPatients[i].id)) {
         const rebuilt = computeRouteOrder(optimized, routeCtx)
         if (rebuilt) {
@@ -584,6 +656,142 @@ export async function generateSchedule({
         total_km:         Math.round((visits.reduce((s, v) => s + (v.estimated_km ?? 0), 0) + returnKm) * 10) / 10,
       },
     })
+  }
+
+  // ── Optimisation cross-jours : échange de patients entre jours jumeaux ───────
+  // Essaie de déplacer un patient d'une journée à sa journée "jumelle" (Lun↔Mer,
+  // Mar↔Jeu) si ça réduit le total km de la semaine. Respecte la règle 48h
+  // implicitement : les jumeaux sont toujours à 2 jours d'écart.
+  const TWIN_PAIRS = [['monday','wednesday'], ['tuesday','thursday']]
+
+  for (const [dayA, dayB] of TWIN_PAIRS) {
+    const idxA = result.findIndex((d) => d.day === dayA)
+    const idxB = result.findIndex((d) => d.day === dayB)
+    if (idxA < 0 || idxB < 0) continue
+
+    const dayDataA = result[idxA]
+    const dayDataB = result[idxB]
+    if (!dayDataA.visits.length || !dayDataB.visits.length) continue
+
+    const cfgA = weeklyConfig[dayA]
+    const cfgB = weeklyConfig[dayB]
+    if (!cfgA?.enabled || !cfgB?.enabled) continue
+
+    const maxA = Number(cfgA.max_visits ?? 20)
+    const maxB = Number(cfgB.max_visits ?? 20)
+
+    const ctxA = {
+      startLat: cfgA.start_lat ?? therapist?.default_start_lat,
+      startLng: cfgA.start_lng ?? therapist?.default_start_lng,
+      dayStart: parseMinutes(cfgA.work_start), dayEnd: parseMinutes(cfgA.work_end),
+      dayKey: dayA, dayDate: dayDataA.date,
+      therapistBlocked: normalizeWindows(cfgA.blocked_windows),
+      partialAbsenceMap, travel, travelBuffer, sessionBuffer,
+    }
+    const ctxB = {
+      startLat: cfgB.start_lat ?? therapist?.default_start_lat,
+      startLng: cfgB.start_lng ?? therapist?.default_start_lng,
+      dayStart: parseMinutes(cfgB.work_start), dayEnd: parseMinutes(cfgB.work_end),
+      dayKey: dayB, dayDate: dayDataB.date,
+      therapistBlocked: normalizeWindows(cfgB.blocked_windows),
+      partialAbsenceMap, travel, travelBuffer, sessionBuffer,
+    }
+
+    const patientById = new Map(patients.map((p) => [p.id, p]))
+
+    let bestTotalKm = dayDataA.stats.total_km + dayDataB.stats.total_km
+    let bestA = null
+    let bestB = null
+
+    // Non-fixes sur chaque journée — candidats au transfert
+    const nonFixedA = dayDataA.visits.filter((v) => !v.is_fixed)
+    const nonFixedB = dayDataB.visits.filter((v) => !v.is_fixed)
+
+    // Essaie de déplacer chaque patient de A vers B
+    for (const vA of nonFixedA) {
+      if (dayDataB.visits.length >= maxB) continue
+      const pA = patientById.get(vA.patient_id)
+      if (!pA) continue
+
+      const newA = dayDataA.visits.filter((v) => v.patient_id !== vA.patient_id).map((v) => patientById.get(v.patient_id)).filter(Boolean)
+      const newB = [...dayDataB.visits.map((v) => patientById.get(v.patient_id)).filter(Boolean), pA]
+
+      const rA = newA.length ? computeRouteOrder(newA, ctxA) : { totalTravel: 0, schedule: [] }
+      const rB = computeRouteOrder(newB, ctxB)
+      if (!rA || !rB) continue
+
+      const kmA = rA.schedule.reduce((s, e) => s + (e.travelKm ?? 0), 0) + (newA.length ? (travel(newA[newA.length-1].lat ?? ctxA.startLat, newA[newA.length-1].lng ?? ctxA.startLng, ctxA.startLat, ctxA.startLng).km) : 0)
+      const kmB = rB.schedule.reduce((s, e) => s + (e.travelKm ?? 0), 0)
+      const totalKm = kmA + kmB
+
+      if (totalKm < bestTotalKm - 0.5) {
+        bestTotalKm = totalKm
+        bestA = { patients: newA, result: rA, ctx: ctxA, dayIdx: idxA, dayKey: dayA, dayDate: dayDataA.date }
+        bestB = { patients: newB, result: rB, ctx: ctxB, dayIdx: idxB, dayKey: dayB, dayDate: dayDataB.date }
+      }
+    }
+
+    // Essaie de déplacer chaque patient de B vers A
+    for (const vB of nonFixedB) {
+      if (dayDataA.visits.length >= maxA) continue
+      const pB = patientById.get(vB.patient_id)
+      if (!pB) continue
+
+      const newA = [...dayDataA.visits.map((v) => patientById.get(v.patient_id)).filter(Boolean), pB]
+      const newB = dayDataB.visits.filter((v) => v.patient_id !== vB.patient_id).map((v) => patientById.get(v.patient_id)).filter(Boolean)
+
+      const rA = computeRouteOrder(newA, ctxA)
+      const rB = newB.length ? computeRouteOrder(newB, ctxB) : { totalTravel: 0, schedule: [] }
+      if (!rA || !rB) continue
+
+      const kmA = rA.schedule.reduce((s, e) => s + (e.travelKm ?? 0), 0)
+      const kmB = rB.schedule.reduce((s, e) => s + (e.travelKm ?? 0), 0)
+      const totalKm = kmA + kmB
+
+      if (totalKm < bestTotalKm - 0.5) {
+        bestTotalKm = totalKm
+        bestA = { patients: newA, result: rA, ctx: ctxA, dayIdx: idxA, dayKey: dayA, dayDate: dayDataA.date }
+        bestB = { patients: newB, result: rB, ctx: ctxB, dayIdx: idxB, dayKey: dayB, dayDate: dayDataB.date }
+      }
+    }
+
+    // Applique le meilleur échange trouvé, puis ré-optimise les deux journées
+    if (bestA && bestB) {
+      for (const { patients: pts, result: r, ctx, dayIdx, dayKey: dk, dayDate: dd } of [bestA, bestB]) {
+        let optimized = twoOptImprove(pts, ctx)
+        optimized = orOptImprove(optimized, ctx)
+        optimized = orOpt2Improve(optimized, ctx)
+        optimized = twoOptImprove(optimized, ctx)
+        const rebuilt = pts.length ? computeRouteOrder(optimized, ctx) : { schedule: [] }
+        if (!rebuilt) continue
+
+        const newVisits = rebuilt.schedule.map(({ patient: p, visitStart, visitEnd, travelMin, travelKm }) => ({
+          patient_id: p.id, patient_name: p.full_name, address: p.address,
+          lat: p.lat, lng: p.lng,
+          start_time: formatMinutes(visitStart), end_time: formatMinutes(visitEnd),
+          session_duration_min: Number(p.session_duration_min ?? 30),
+          estimated_travel_min: travelMin + travelBuffer,
+          estimated_km: travelKm, is_fixed: p.is_fixed ?? false, done: false,
+        }))
+
+        const lastLat = optimized[optimized.length - 1]?.lat ?? ctx.startLat
+        const lastLng = optimized[optimized.length - 1]?.lng ?? ctx.startLng
+        const endLat = (weeklyConfig[dk]?.end_lat ?? therapist?.default_end_lat) ?? ctx.startLat
+        const endLng = (weeklyConfig[dk]?.end_lng ?? therapist?.default_end_lng) ?? ctx.startLng
+        const { minutes: retMin, km: retKm } = travel(lastLat, lastLng, endLat, endLng)
+
+        result[dayIdx] = {
+          ...result[dayIdx],
+          visits: newVisits,
+          stats: {
+            total_visits: newVisits.length,
+            total_travel_min: Math.round(newVisits.reduce((s, v) => s + v.estimated_travel_min, 0) + retMin),
+            total_session_min: Math.round(newVisits.reduce((s, v) => s + v.session_duration_min, 0)),
+            total_km: Math.round((newVisits.reduce((s, v) => s + (v.estimated_km ?? 0), 0) + retKm) * 10) / 10,
+          },
+        }
+      }
+    }
   }
 
   const weekStats = result.reduce(
