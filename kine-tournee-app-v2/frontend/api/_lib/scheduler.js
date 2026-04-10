@@ -87,26 +87,92 @@ function isInsideBlocked(timeStart, timeEnd, blockedWindows) {
   return blockedWindows.some((b) => !(timeEnd <= b.start || timeStart >= b.end))
 }
 
-// Jours des deux tournées fixes
 const TOURNEE_A = ['monday', 'wednesday']
 const TOURNEE_B = ['tuesday', 'thursday']
+
+/**
+ * Clustering k-means géographique à 2 zones.
+ * Initialise les centroides sur les adresses de départ des tournées A et B,
+ * puis itère jusqu'à convergence pour obtenir des zones cohérentes sans
+ * traversée inutile de secteurs.
+ *
+ * @param   patients  - patients avec lat/lng
+ * @param   centerA   - {lat, lng} départ tournée A (lundi)
+ * @param   centerB   - {lat, lng} départ tournée B (mardi)
+ * @returns Map<patientId, 0|1>  — 0 = zone A, 1 = zone B
+ */
+function kmeansZones(patients, centerA, centerB, maxIter = 10) {
+  const pts = patients.filter((p) => p.lat && p.lng)
+  if (!pts.length) return new Map()
+
+  let centers = [
+    { lat: centerA.lat, lng: centerA.lng },
+    { lat: centerB.lat, lng: centerB.lng },
+  ]
+  let assignments = new Map()
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    const clusters = [[], []]
+    const next = new Map()
+
+    for (const p of pts) {
+      const dA = euclideanKm(p.lat, p.lng, centers[0].lat, centers[0].lng)
+      const dB = euclideanKm(p.lat, p.lng, centers[1].lat, centers[1].lng)
+      const zone = dA <= dB ? 0 : 1
+      next.set(p.id, zone)
+      clusters[zone].push(p)
+    }
+
+    // Convergence ?
+    let changed = false
+    for (const [id, zone] of next) {
+      if (assignments.get(id) !== zone) { changed = true; break }
+    }
+    assignments = next
+    if (!changed) break
+
+    // Recalculer les centroides (conserver l'ancien si cluster vide)
+    for (let i = 0; i < 2; i++) {
+      if (clusters[i].length > 0) {
+        centers[i] = {
+          lat: clusters[i].reduce((s, p) => s + p.lat, 0) / clusters[i].length,
+          lng: clusters[i].reduce((s, p) => s + p.lng, 0) / clusters[i].length,
+        }
+      }
+    }
+  }
+
+  return assignments
+}
 
 /**
  * Pré-assigne chaque patient à des jours spécifiques de la semaine.
  *
  * Règles :
- *  - Respecte sessions_per_week
- *  - Minimum 2 jours d'écart entre deux passages (règle des 48h)
- *  - Respecte les indisponibilités du patient et ses absences ponctuelles
- *  - Tournée explicite (patient.tournee = 'A' ou 'B') : jours préférés Lun+Mer ou Mar+Jeu
- *  - Tournée automatique (2x/sem) : équilibre entre A et B en alternant
+ *  - Respecte sessions_per_week avec écart ≥ 2 jours
+ *  - Tournée explicite (patient.tournee = 'A' ou 'B') : préfère Lun+Mer ou Mar+Jeu
+ *  - Tournée automatique (2x/sem) : assignation géographique (proximité départ tournée A vs B)
+ *    → fallback round-robin si coordonnées manquantes ou identiques
  *  - 3x/sem : Lun+Mer+Ven de préférence
  *
- * Retourne un Map : patientId → [dayKey, ...]
+ * @param startLocByDay - { monday:{lat,lng}, tuesday:{lat,lng}, … }
  */
-function preAssignDays(patients, enabledDays, absentSet) {
+function preAssignDays(patients, enabledDays, absentSet, startLocByDay = {}) {
   const assignments = new Map()
-  let autoTourneeCounter = 0 // pour alterner A/B en auto
+  let autoTourneeCounter = 0
+
+  const aLoc = startLocByDay['monday']
+  const bLoc = startLocByDay['tuesday']
+  const geoAvailable = !!(
+    aLoc?.lat && aLoc?.lng && bLoc?.lat && bLoc?.lng &&
+    (aLoc.lat !== bLoc.lat || aLoc.lng !== bLoc.lng)
+  )
+
+  // Pré-calculer les zones k-means pour les patients auto 2x/sem avec coordonnées
+  const autoPatients2x = patients.filter(
+    (p) => p.active && !p.tournee && Number(p.sessions_per_week ?? 1) === 2 && p.lat && p.lng
+  )
+  const zoneMap = geoAvailable ? kmeansZones(autoPatients2x, aLoc, bLoc) : new Map()
 
   for (const patient of patients) {
     if (!patient.active) { assignments.set(patient.id, []); continue }
@@ -114,29 +180,30 @@ function preAssignDays(patients, enabledDays, absentSet) {
     const n = Math.max(0, Number(patient.sessions_per_week ?? 1))
     if (n === 0) { assignments.set(patient.id, []); continue }
 
-    // Jours disponibles pour ce patient cette semaine
     const availableDays = enabledDays.filter((day) => {
       if (absentSet.has(`${patient.id}|${day.date}`)) return false
       const dayAvail = (patient.availability ?? {})[day.key] ?? {}
-      if (dayAvail.unavailable === true) return false
-      return true
+      return dayAvail.unavailable !== true
     })
 
     if (!availableDays.length) { assignments.set(patient.id, []); continue }
 
-    // Déterminer la tournée préférée
     let preferred = null
     if (patient.tournee === 'A') {
       preferred = TOURNEE_A
     } else if (patient.tournee === 'B') {
       preferred = TOURNEE_B
     } else if (n === 2) {
-      // Auto-équilibre : alterner A et B
-      preferred = autoTourneeCounter % 2 === 0 ? TOURNEE_A : TOURNEE_B
-      autoTourneeCounter++
+      if (zoneMap.has(patient.id)) {
+        // Zone k-means : assignation géographique convergée
+        preferred = zoneMap.get(patient.id) === 0 ? TOURNEE_A : TOURNEE_B
+      } else {
+        // Fallback (pas de coords) : round-robin équilibré
+        preferred = autoTourneeCounter % 2 === 0 ? TOURNEE_A : TOURNEE_B
+        autoTourneeCounter++
+      }
     }
 
-    // Trier les jours disponibles : jours préférés en premier, puis par dow
     const sortedDays = preferred
       ? [...availableDays].sort((a, b) => {
           const aP = preferred.includes(a.key) ? 0 : 1
@@ -145,7 +212,6 @@ function preAssignDays(patients, enabledDays, absentSet) {
         })
       : availableDays
 
-    // Sélection gloutonne : n jours avec écart ≥ 2 entre chaque
     function pickWithGap(remaining, minDow, chosen) {
       if (remaining === 0) return chosen
       for (const day of sortedDays) {
@@ -158,9 +224,6 @@ function preAssignDays(patients, enabledDays, absentSet) {
     }
 
     let picked = pickWithGap(n, 1, [])
-
-    // Fallback si impossible de respecter l'écart (ex: seulement 2 jours activés
-    // et patient 3x/sem) → on prend ce qu'on peut avec écart maximal possible
     if (!picked) {
       picked = pickWithGap(Math.min(n, sortedDays.length), 1, [])
         ?? sortedDays.slice(0, n).map((d) => d.key)
@@ -180,7 +243,7 @@ function preAssignDays(patients, enabledDays, absentSet) {
  * @param {Array}  params.patients
  * @param {number} params.travelBuffer
  * @param {number} params.sessionBuffer
- * @param {Set}    params.absentSet
+ * @param {Array}  params.absences         [{patient_id, absence_date, start_time?, end_time?}]
  */
 export async function generateSchedule({
   weekStart,
@@ -189,10 +252,28 @@ export async function generateSchedule({
   patients,
   travelBuffer = 10,
   sessionBuffer = 5,
-  absentSet = new Set(),
+  absences = [],
 }) {
   const days = getDayDates(weekStart)
   const enabledDays = days.filter((d) => weeklyConfig[d.key]?.enabled)
+
+  // ── Traitement des absences ───────────────────────────────────────────────
+  // fullDayAbsenceSet : "patientId|date" → exclure entièrement le patient ce jour
+  // partialAbsenceMap : "patientId|date" → [{start, end}] → fenêtre bloquée uniquement
+  const fullDayAbsenceSet = new Set()
+  const partialAbsenceMap = new Map()
+  for (const a of absences) {
+    const key = `${a.patient_id}|${a.absence_date}`
+    if (a.start_time && a.end_time) {
+      if (!partialAbsenceMap.has(key)) partialAbsenceMap.set(key, [])
+      partialAbsenceMap.get(key).push({
+        start: parseMinutes(a.start_time),
+        end:   parseMinutes(a.end_time),
+      })
+    } else {
+      fullDayAbsenceSet.add(key)
+    }
+  }
 
   // ── Matrice OSRM ──────────────────────────────────────────────────────────
   const allLocations = []
@@ -217,8 +298,18 @@ export async function generateSchedule({
   const travel = createTravelFn(matrix, allLocations)
   const routingSource = matrix ? 'osrm' : 'euclidean'
 
-  // ── Pré-assignation des patients aux jours (règle 48h) ────────────────────
-  const dayAssignments = preAssignDays(patients, enabledDays, absentSet)
+  // ── Coordonnées de départ par jour (pour l'assignation géographique) ────────
+  const startLocByDay = {}
+  days.forEach((day) => {
+    const cfg = weeklyConfig[day.key]
+    if (!cfg?.enabled) return
+    const lat = cfg.start_lat ?? therapist?.default_start_lat
+    const lng = cfg.start_lng ?? therapist?.default_start_lng
+    if (lat && lng) startLocByDay[day.key] = { lat, lng }
+  })
+
+  // ── Pré-assignation des patients aux jours (règle 48h + géographie) ───────
+  const dayAssignments = preAssignDays(patients, enabledDays, fullDayAbsenceSet, startLocByDay)
 
   // Index inverse : dayKey → [patients assignés ce jour]
   const patientsByDay = new Map(days.map((d) => [d.key, []]))
@@ -277,6 +368,9 @@ export async function generateSchedule({
 
         const patientBlocked = normalizeWindows((p.availability?.[day.key] ?? {}).blocked_windows)
         if (isInsideBlocked(startVisit, endVisit, patientBlocked)) return false
+
+        const partialAbsence = partialAbsenceMap.get(`${p.id}|${day.date}`) ?? []
+        if (partialAbsence.length && isInsideBlocked(startVisit, endVisit, partialAbsence)) return false
 
         return true
       })

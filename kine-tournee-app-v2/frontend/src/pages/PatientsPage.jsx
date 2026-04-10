@@ -87,6 +87,9 @@ function UnavailabilityEditor({ availability, onChange }) {
 function AbsenceManager({ patientId, absences, setAbsences }) {
   const [date, setDate] = useState('')
   const [reason, setReason] = useState('')
+  const [showTime, setShowTime] = useState(false)
+  const [startTime, setStartTime] = useState('08:00')
+  const [endTime, setEndTime] = useState('12:00')
   const [saving, setSaving] = useState(false)
   const toast = useToast()
 
@@ -94,7 +97,12 @@ function AbsenceManager({ patientId, absences, setAbsences }) {
     if (!date) return
     setSaving(true)
     try {
-      const a = await api.addAbsence(patientId, { absence_date: date, reason })
+      const payload = { absence_date: date, reason }
+      if (showTime && startTime && endTime && startTime < endTime) {
+        payload.start_time = startTime
+        payload.end_time = endTime
+      }
+      const a = await api.addAbsence(patientId, payload)
       setAbsences((prev) => [...prev.filter((x) => x.absence_date !== date), a])
       setDate(''); setReason('')
       toast.success('Absence enregistrée')
@@ -109,20 +117,36 @@ function AbsenceManager({ patientId, absences, setAbsences }) {
 
   return (
     <div className="absence-manager">
-      <div className="small muted" style={{ marginBottom: 6 }}>Absences ponctuelles (le patient ne sera pas planifié ces jours)</div>
+      <div className="small muted" style={{ marginBottom: 6 }}>Absences ponctuelles — sans heure : journée entière exclue ; avec heure : exclusion sur la plage uniquement</div>
       <div className="absence-list">
         {absences.map((a) => (
           <span key={a.absence_date} className="time-badge badge-orange">
-            {a.absence_date}{a.reason ? ` — ${a.reason}` : ''}
+            {a.absence_date}
+            {a.start_time && a.end_time ? ` ${a.start_time.slice(0,5)}–${a.end_time.slice(0,5)}` : ''}
+            {a.reason ? ` — ${a.reason}` : ''}
             <button className="badge-remove" onClick={() => remove(a.absence_date)}>×</button>
           </span>
         ))}
         {absences.length === 0 && <span className="small muted">Aucune absence</span>}
       </div>
-      <div className="time-window-add" style={{ marginTop: 6 }}>
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
-        <input placeholder="Motif (optionnel)" value={reason} onChange={(e) => setReason(e.target.value)} style={{ flex: 1 }} />
-        <button className="secondary small-btn" onClick={add} disabled={saving || !date}>{saving ? '…' : '+ Ajouter'}</button>
+      <div style={{ marginTop: 6 }}>
+        <div className="time-window-add" style={{ flexWrap: 'wrap' }}>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          <input placeholder="Motif (optionnel)" value={reason} onChange={(e) => setReason(e.target.value)} style={{ flex: 1, minWidth: 120 }} />
+          <label className="checkbox-label" style={{ whiteSpace: 'nowrap' }}>
+            <input type="checkbox" checked={showTime} onChange={(e) => setShowTime(e.target.checked)} />
+            Heure
+          </label>
+          <button className="secondary small-btn" onClick={add} disabled={saving || !date}>{saving ? '…' : '+ Ajouter'}</button>
+        </div>
+        {showTime && (
+          <div className="time-window-add" style={{ marginTop: 4 }}>
+            <span className="small muted">De</span>
+            <input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} />
+            <span className="small muted">à</span>
+            <input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} />
+          </div>
+        )}
       </div>
     </div>
   )

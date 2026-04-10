@@ -235,7 +235,7 @@ app.post('/api/schedule/generate', async (req, res) => {
     supabase.from('patients').select('*').eq('active', true),
     supabase
       .from('patient_absences')
-      .select('patient_id,absence_date')
+      .select('patient_id,absence_date,start_time,end_time')
       .gte('absence_date', weekStart)
       .lte('absence_date', weekEnd),
   ])
@@ -252,7 +252,6 @@ app.post('/api/schedule/generate', async (req, res) => {
 
   try {
     const weeklyConfig = Object.fromEntries((weeklyRows ?? []).map((row) => [row.day_key, row]))
-    const absentSet = new Set((absences ?? []).map((a) => `${a.patient_id}|${a.absence_date}`))
 
     const schedule = await generateSchedule({
       weekStart,
@@ -261,7 +260,7 @@ app.post('/api/schedule/generate', async (req, res) => {
       patients: patients ?? [],
       travelBuffer: therapist?.travel_buffer_min ?? 10,
       sessionBuffer: therapist?.session_buffer_min ?? 5,
-      absentSet,
+      absences: absences ?? [],
     })
 
     const { error: insertError } = await supabase.from('generated_schedules').insert({
