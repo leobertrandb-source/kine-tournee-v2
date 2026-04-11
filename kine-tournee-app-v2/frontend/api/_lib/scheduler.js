@@ -513,6 +513,9 @@ export async function generateSchedule({
 
     const dayStartLat = dayConfig.start_lat ?? therapist?.default_start_lat
     const dayStartLng = dayConfig.start_lng ?? therapist?.default_start_lng
+    // Déclarés ici pour être accessibles dans le greedy ET l'optimisation
+    const endLat = dayConfig.end_lat ?? therapist?.default_end_lat
+    const endLng = dayConfig.end_lng ?? therapist?.default_end_lng
     let currentTime = dayStart
     let currentLat  = dayStartLat
     let currentLng  = dayStartLng
@@ -534,8 +537,12 @@ export async function generateSchedule({
 
     // Ensemble des patients déjà planifiés ce jour (anti-doublon)
     const visitedToday = new Set()
+    // Compteur de sécurité séparé pour éviter une boucle infinie
+    // (le nombre de visites réelles est suivi par visitedToday.size)
+    let safetyIter = 0
+    const maxSafetyIter = maxVisits * 3
 
-    for (let i = 0; i < maxVisits && visitedToday.size < todayPatients.length; i++) {
+    while (visitedToday.size < maxVisits && visitedToday.size < todayPatients.length && safetyIter++ < maxSafetyIter) {
       const candidates = todayPatients.filter((p) => {
         if (visitedToday.has(p.id)) return false
 
@@ -569,9 +576,7 @@ export async function generateSchedule({
       }
 
       // Fixes en tête, sinon score = trajet(actuel→p) + 0.4 × trajet(p→arrivée)
-      // → le coefficient 0.4 attire progressivement les patients proches du
-      //   point d'arrivée vers la fin de la tournée (ex. cabinet = dernier)
-      const remaining = todayPatients.filter((p) => !visitedToday.has(p.id)).length
+      // → attire les patients proches du point de retour vers la fin de la tournée
       const endWeight = endLat && endLng ? 0.4 : 0
       const scored = candidates.map((p) => {
         const { minutes: toP } = travel(currentLat, currentLng, p.lat, p.lng)
@@ -608,9 +613,6 @@ export async function generateSchedule({
     }
 
     // ── Optimisation de l'ordre des visites : 2-opt → or-opt → or-opt-2 ───────
-    const endLat = dayConfig.end_lat ?? therapist?.default_end_lat
-    const endLng = dayConfig.end_lng ?? therapist?.default_end_lng
-
     if (visits.length >= 3) {
       const patientById = new Map(patients.map((p) => [p.id, p]))
       const greedyPatients = visits.map((v) => patientById.get(v.patient_id)).filter(Boolean)
@@ -720,7 +722,13 @@ export async function generateSchedule({
 
     const patientById = new Map(patients.map((p) => [p.id, p]))
 
-    let bestTotalKm = dayDataA.stats.total_km + dayDataB.stats.total_km
+    // Référence : totalTravel actuel des deux journées (inclut le retour)
+    // On utilise les minutes plutôt que km pour cohérence avec computeRouteOrder
+    const ptsA0 = dayDataA.visits.map((v) => patientById.get(v.patient_id)).filter(Boolean)
+    const ptsB0 = dayDataB.visits.map((v) => patientById.get(v.patient_id)).filter(Boolean)
+    const baseA = computeRouteOrder(ptsA0, ctxA)?.totalTravel ?? Infinity
+    const baseB = computeRouteOrder(ptsB0, ctxB)?.totalTravel ?? Infinity
+    let bestTotalTravel = baseA + baseB
     let bestA = null
     let bestB = null
 
@@ -733,6 +741,8 @@ export async function generateSchedule({
       if (dayDataB.visits.length >= maxB) continue
       const pA = patientById.get(vA.patient_id)
       if (!pA) continue
+      // Vérifier que le patient n'est pas indisponible sur dayB
+      if ((pA.availability?.[dayB] ?? {}).unavailable === true) continue
 
       const newA = dayDataA.visits.filter((v) => v.patient_id !== vA.patient_id).map((v) => patientById.get(v.patient_id)).filter(Boolean)
       const newB = [...dayDataB.visits.map((v) => patientById.get(v.patient_id)).filter(Boolean), pA]
@@ -741,12 +751,9 @@ export async function generateSchedule({
       const rB = computeRouteOrder(newB, ctxB)
       if (!rA || !rB) continue
 
-      const kmA = rA.schedule.reduce((s, e) => s + (e.travelKm ?? 0), 0) + (newA.length ? (travel(newA[newA.length-1].lat ?? ctxA.startLat, newA[newA.length-1].lng ?? ctxA.startLng, ctxA.startLat, ctxA.startLng).km) : 0)
-      const kmB = rB.schedule.reduce((s, e) => s + (e.travelKm ?? 0), 0)
-      const totalKm = kmA + kmB
-
-      if (totalKm < bestTotalKm - 0.5) {
-        bestTotalKm = totalKm
+      const totalTravel = rA.totalTravel + rB.totalTravel
+      if (totalTravel < bestTotalTravel - 1) {
+        bestTotalTravel = totalTravel
         bestA = { patients: newA, result: rA, ctx: ctxA, dayIdx: idxA, dayKey: dayA, dayDate: dayDataA.date }
         bestB = { patients: newB, result: rB, ctx: ctxB, dayIdx: idxB, dayKey: dayB, dayDate: dayDataB.date }
       }
@@ -757,6 +764,8 @@ export async function generateSchedule({
       if (dayDataA.visits.length >= maxA) continue
       const pB = patientById.get(vB.patient_id)
       if (!pB) continue
+      // Vérifier que le patient n'est pas indisponible sur dayA
+      if ((pB.availability?.[dayA] ?? {}).unavailable === true) continue
 
       const newA = [...dayDataA.visits.map((v) => patientById.get(v.patient_id)).filter(Boolean), pB]
       const newB = dayDataB.visits.filter((v) => v.patient_id !== vB.patient_id).map((v) => patientById.get(v.patient_id)).filter(Boolean)
@@ -765,12 +774,9 @@ export async function generateSchedule({
       const rB = newB.length ? computeRouteOrder(newB, ctxB) : { totalTravel: 0, schedule: [] }
       if (!rA || !rB) continue
 
-      const kmA = rA.schedule.reduce((s, e) => s + (e.travelKm ?? 0), 0)
-      const kmB = rB.schedule.reduce((s, e) => s + (e.travelKm ?? 0), 0)
-      const totalKm = kmA + kmB
-
-      if (totalKm < bestTotalKm - 0.5) {
-        bestTotalKm = totalKm
+      const totalTravel = rA.totalTravel + rB.totalTravel
+      if (totalTravel < bestTotalTravel - 1) {
+        bestTotalTravel = totalTravel
         bestA = { patients: newA, result: rA, ctx: ctxA, dayIdx: idxA, dayKey: dayA, dayDate: dayDataA.date }
         bestB = { patients: newB, result: rB, ctx: ctxB, dayIdx: idxB, dayKey: dayB, dayDate: dayDataB.date }
       }
