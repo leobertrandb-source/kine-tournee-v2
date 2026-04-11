@@ -264,6 +264,24 @@ const TOURNEE_A = ['monday', 'wednesday']
 const TOURNEE_B = ['tuesday', 'thursday']
 
 /**
+ * Teste si un point (lat, lng) est à l'intérieur d'un polygone.
+ * Algorithme ray casting — O(n) en nombre de sommets.
+ * @param polygon - [{lat, lng}, ...]
+ */
+function pointInPolygon(lat, lng, polygon) {
+  let inside = false
+  const n = polygon.length
+  for (let i = 0, j = n - 1; i < n; j = i++) {
+    const { lat: yi, lng: xi } = polygon[i]
+    const { lat: yj, lng: xj } = polygon[j]
+    if ((yi > lat) !== (yj > lat) && lng < ((xj - xi) * (lat - yi)) / (yj - yi) + xi) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+/**
  * Clustering k-means géographique à 2 zones.
  * Initialise les centroides sur les adresses de départ des tournées A et B,
  * puis itère jusqu'à convergence pour obtenir des zones cohérentes sans
@@ -321,16 +339,16 @@ function kmeansZones(patients, centerA, centerB, maxIter = 10) {
 /**
  * Pré-assigne chaque patient à des jours spécifiques de la semaine.
  *
- * Règles :
- *  - Respecte sessions_per_week avec écart ≥ 2 jours
- *  - Tournée explicite (patient.tournee = 'A' ou 'B') : préfère Lun+Mer ou Mar+Jeu
- *  - Tournée automatique (2x/sem) : assignation géographique (proximité départ tournée A vs B)
- *    → fallback round-robin si coordonnées manquantes ou identiques
- *  - 3x/sem : Lun+Mer+Ven de préférence
+ * Priorité d'assignation :
+ *  1. Tournée explicite (patient.tournee = 'A'/'B')
+ *  2. Zone dessinée manuellement (dayZones) — si le patient est dans un polygone
+ *  3. K-means géographique (2x/sem sans coordonnées de zone)
+ *  4. Round-robin fallback
  *
  * @param startLocByDay - { monday:{lat,lng}, tuesday:{lat,lng}, … }
+ * @param dayZones      - { monday:[{lat,lng},...], tuesday:[...], … }
  */
-function preAssignDays(patients, enabledDays, absentSet, startLocByDay = {}) {
+function preAssignDays(patients, enabledDays, absentSet, startLocByDay = {}, dayZones = {}) {
   const assignments = new Map()
   let autoTourneeCounter = 0
 
@@ -341,11 +359,14 @@ function preAssignDays(patients, enabledDays, absentSet, startLocByDay = {}) {
     (aLoc.lat !== bLoc.lat || aLoc.lng !== bLoc.lng)
   )
 
-  // Pré-calculer les zones k-means pour les patients auto 2x/sem avec coordonnées
+  // Pré-calculer les zones k-means pour les patients sans zone dessinée
   const autoPatients2x = patients.filter(
     (p) => p.active && !p.tournee && Number(p.sessions_per_week ?? 1) === 2 && p.lat && p.lng
   )
   const zoneMap = geoAvailable ? kmeansZones(autoPatients2x, aLoc, bLoc) : new Map()
+
+  // Jours qui ont une zone dessinée valide
+  const daysWithZone = enabledDays.filter((d) => (dayZones[d.key]?.length ?? 0) >= 3)
 
   for (const patient of patients) {
     if (!patient.active) { assignments.set(patient.id, []); continue }
@@ -366,12 +387,21 @@ function preAssignDays(patients, enabledDays, absentSet, startLocByDay = {}) {
       preferred = TOURNEE_A
     } else if (patient.tournee === 'B') {
       preferred = TOURNEE_B
-    } else if (n === 2) {
+    } else if (daysWithZone.length > 0 && patient.lat && patient.lng) {
+      // Zones dessinées : le patient appartient aux jours dont le polygone le contient
+      const matchingZoneDays = daysWithZone
+        .filter((d) => pointInPolygon(patient.lat, patient.lng, dayZones[d.key]))
+        .map((d) => d.key)
+      if (matchingZoneDays.length > 0) {
+        preferred = matchingZoneDays
+      }
+    }
+
+    // Fallback k-means (uniquement si pas de zone dessinée ni tournée explicite)
+    if (!preferred && n === 2) {
       if (zoneMap.has(patient.id)) {
-        // Zone k-means : assignation géographique convergée
         preferred = zoneMap.get(patient.id) === 0 ? TOURNEE_A : TOURNEE_B
       } else {
-        // Fallback (pas de coords) : round-robin équilibré
         preferred = autoTourneeCounter % 2 === 0 ? TOURNEE_A : TOURNEE_B
         autoTourneeCounter++
       }
@@ -481,8 +511,15 @@ export async function generateSchedule({
     if (lat && lng) startLocByDay[day.key] = { lat, lng }
   })
 
+  // ── Zones dessinées par le kiné (polygones par jour) ─────────────────────
+  const dayZones = {}
+  days.forEach((day) => {
+    const cfg = weeklyConfig[day.key]
+    if (cfg?.zone_polygon?.length >= 3) dayZones[day.key] = cfg.zone_polygon
+  })
+
   // ── Pré-assignation des patients aux jours (règle 48h + géographie) ───────
-  const dayAssignments = preAssignDays(patients, enabledDays, fullDayAbsenceSet, startLocByDay)
+  const dayAssignments = preAssignDays(patients, enabledDays, fullDayAbsenceSet, startLocByDay, dayZones)
 
   // Index inverse : dayKey → [patients assignés ce jour]
   const patientsByDay = new Map(days.map((d) => [d.key, []]))

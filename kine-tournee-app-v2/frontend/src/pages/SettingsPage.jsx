@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { api } from '../lib/api'
 import AddressAutocomplete from '../components/AddressAutocomplete'
 
@@ -11,6 +11,171 @@ const DAY_LABELS = {
   friday: 'Vendredi',
   saturday: 'Samedi',
   sunday: 'Dimanche',
+}
+
+// ── Éditeur de zone géographique de tournée ───────────────────────────────────
+function ZoneEditor({ zone, onChange, defaultCenter }) {
+  const mapRef = useRef(null)
+  const instanceRef = useRef(null)
+  const layersRef = useRef({ polygon: null, polyline: null, markers: [] })
+  const drawingRef = useRef(false)
+  const pointsRef = useRef([...(zone ?? [])])
+  const [showMap, setShowMap] = useState(false)
+  const [isDrawing, setIsDrawing] = useState(false)
+  const [pointCount, setPointCount] = useState((zone ?? []).length)
+
+  // Sync pointsRef when zone prop changes from outside (ex: save)
+  useEffect(() => { pointsRef.current = [...(zone ?? [])] }, [zone])
+
+  const handleMapClick = useRef(null)
+
+  useEffect(() => {
+    if (!showMap) return
+    const L = window.L
+    if (!L || !mapRef.current) return
+
+    const center = defaultCenter ?? [46.6, 2.3]
+    const zoom = defaultCenter ? 12 : 6
+    const map = L.map(mapRef.current).setView(center, zoom)
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { attribution: '© OSM' }).addTo(map)
+    instanceRef.current = map
+
+    // Afficher la zone existante
+    const pts = pointsRef.current
+    if (pts.length >= 3) {
+      layersRef.current.polygon = L.polygon(pts.map((p) => [p.lat, p.lng]), {
+        color: '#184f3b', weight: 2, fillOpacity: 0.15,
+      }).addTo(map)
+      map.fitBounds(layersRef.current.polygon.getBounds(), { padding: [24, 24] })
+    }
+
+    // Gestionnaire de clic pour le dessin
+    handleMapClick.current = (e) => {
+      if (!drawingRef.current) return
+      const pt = { lat: e.latlng.lat, lng: e.latlng.lng }
+      pointsRef.current = [...pointsRef.current, pt]
+      setPointCount(pointsRef.current.length)
+
+      const m = L.circleMarker([pt.lat, pt.lng], {
+        radius: 5, color: '#184f3b', fillColor: '#184f3b', fillOpacity: 1,
+      }).addTo(map)
+      layersRef.current.markers.push(m)
+
+      if (layersRef.current.polyline) map.removeLayer(layersRef.current.polyline)
+      if (pointsRef.current.length >= 2) {
+        const previewPts = [...pointsRef.current, pointsRef.current[0]]
+        layersRef.current.polyline = L.polyline(previewPts.map((p) => [p.lat, p.lng]), {
+          color: '#184f3b', dashArray: '5,5', weight: 2,
+        }).addTo(map)
+      }
+    }
+    map.on('click', handleMapClick.current)
+
+    return () => {
+      drawingRef.current = false
+      map.off('click', handleMapClick.current)
+      map.remove()
+      instanceRef.current = null
+      layersRef.current = { polygon: null, polyline: null, markers: [] }
+    }
+  }, [showMap]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  function startDrawing() {
+    const map = instanceRef.current
+    if (!map) return
+    // Effacer l'existant
+    if (layersRef.current.polygon) { map.removeLayer(layersRef.current.polygon); layersRef.current.polygon = null }
+    if (layersRef.current.polyline) { map.removeLayer(layersRef.current.polyline); layersRef.current.polyline = null }
+    layersRef.current.markers.forEach((m) => map.removeLayer(m))
+    layersRef.current.markers = []
+    pointsRef.current = []
+    setPointCount(0)
+    drawingRef.current = true
+    setIsDrawing(true)
+    map.getContainer().style.cursor = 'crosshair'
+  }
+
+  function finishDrawing() {
+    const L = window.L
+    const map = instanceRef.current
+    if (!map || !L) return
+    drawingRef.current = false
+    setIsDrawing(false)
+    map.getContainer().style.cursor = ''
+    if (layersRef.current.polyline) { map.removeLayer(layersRef.current.polyline); layersRef.current.polyline = null }
+    layersRef.current.markers.forEach((m) => map.removeLayer(m))
+    layersRef.current.markers = []
+    const pts = pointsRef.current
+    if (pts.length >= 3) {
+      layersRef.current.polygon = L.polygon(pts.map((p) => [p.lat, p.lng]), {
+        color: '#184f3b', weight: 2, fillOpacity: 0.15,
+      }).addTo(map)
+      onChange(pts)
+    }
+  }
+
+  function clearZone() {
+    const map = instanceRef.current
+    if (map && layersRef.current.polygon) { map.removeLayer(layersRef.current.polygon); layersRef.current.polygon = null }
+    pointsRef.current = []
+    setPointCount(0)
+    onChange(null)
+  }
+
+  const hasZone = pointCount >= 3
+
+  return (
+    <div style={{ gridColumn: '1 / -1' }}>
+      <div className="row" style={{ gap: 8, alignItems: 'center', marginBottom: showMap ? 8 : 0 }}>
+        <div className="small avail-label avail-label--green" style={{ marginBottom: 0, flex: 1 }}>
+          Zone de tournée
+          {hasZone && !isDrawing && (
+            <span className="badge badge-green badge-xs" style={{ marginLeft: 6 }}>✓ Définie</span>
+          )}
+        </div>
+        <button type="button" className="secondary small-btn" onClick={() => setShowMap((v) => !v)}>
+          {showMap ? '▲ Masquer' : '🗺 Dessiner la zone'}
+        </button>
+        {hasZone && (
+          <button type="button" className="secondary small-btn" style={{ color: 'var(--red, #dc2626)' }} onClick={clearZone}>
+            🗑 Effacer
+          </button>
+        )}
+      </div>
+
+      {showMap && (
+        <>
+          <div ref={mapRef} style={{ height: 300, borderRadius: 8, border: '1px solid var(--border)', marginBottom: 8 }} />
+          <div className="row" style={{ gap: 8 }}>
+            {!isDrawing ? (
+              <button type="button" className="secondary small-btn" onClick={startDrawing}>
+                ✏ {hasZone ? 'Redessiner' : 'Commencer le dessin'}
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button" className="primary small-btn"
+                  onClick={finishDrawing} disabled={pointCount < 3}
+                >
+                  ✓ Terminer le polygone
+                </button>
+                <button type="button" className="secondary small-btn" onClick={() => {
+                  drawingRef.current = false; setIsDrawing(false)
+                  const map = instanceRef.current
+                  if (map) map.getContainer().style.cursor = ''
+                }}>
+                  Annuler
+                </button>
+                <span className="small muted">
+                  {pointCount === 0 ? 'Cliquez sur la carte pour commencer' : `${pointCount} point${pointCount > 1 ? 's' : ''} — encore ${Math.max(0, 3 - pointCount)} minimum`}
+                </span>
+              </>
+            )}
+          </div>
+        </>
+      )}
+    </div>
+  )
 }
 
 // ── Éditeur de fenêtres de pause (blocked_windows) ───────────────────────────
@@ -263,6 +428,17 @@ export default function SettingsPage({ therapist, setTherapist, weeklyConfig, se
                     onChange={(w) => updateDay(dayKey, { blocked_windows: w })}
                   />
                 </div>
+                <ZoneEditor
+                  zone={row.zone_polygon ?? null}
+                  onChange={(z) => updateDay(dayKey, { zone_polygon: z })}
+                  defaultCenter={
+                    (row.start_lat && row.start_lng)
+                      ? [row.start_lat, row.start_lng]
+                      : (therapist?.default_start_lat && therapist?.default_start_lng)
+                        ? [therapist.default_start_lat, therapist.default_start_lng]
+                        : null
+                  }
+                />
               </div>
             )}
           </div>
