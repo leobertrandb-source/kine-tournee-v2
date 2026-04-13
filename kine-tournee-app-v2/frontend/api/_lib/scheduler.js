@@ -649,23 +649,23 @@ export async function generateSchedule({
       currentLng  = chosen.lng
     }
 
-    // ── Optimisation de l'ordre des visites : 2-opt → or-opt → or-opt-2 ───────
+    // ── Optimisation + insertion forcée ────────────────────────────────────────
+    const patientById = new Map(patients.map((p) => [p.id, p]))
+    const routeCtx = {
+      startLat: dayStartLat, startLng: dayStartLng,
+      endLat, endLng,
+      dayStart, dayEnd, dayKey: day.key, dayDate: day.date,
+      therapistBlocked, partialAbsenceMap,
+      travel, travelBuffer, sessionBuffer,
+    }
+
     if (visits.length >= 3) {
-      const patientById = new Map(patients.map((p) => [p.id, p]))
+      // Chaîne d'optimisation : 2-opt → or-opt → or-opt-2 → 2-opt final
       const greedyPatients = visits.map((v) => patientById.get(v.patient_id)).filter(Boolean)
-      const routeCtx = {
-        startLat: dayStartLat, startLng: dayStartLng,
-        endLat, endLng,
-        dayStart, dayEnd, dayKey: day.key, dayDate: day.date,
-        therapistBlocked, partialAbsenceMap,
-        travel, travelBuffer, sessionBuffer,
-      }
-      // Chaîne d'optimisation : 2-opt (échanges de segments) → or-opt (relocation
-      // de noeuds isolés) → or-opt-2 (relocation de paires) → 2-opt final
       let optimized = twoOptImprove(greedyPatients, routeCtx)
       optimized = orOptImprove(optimized, routeCtx)
       optimized = orOpt2Improve(optimized, routeCtx)
-      optimized = twoOptImprove(optimized, routeCtx) // passe finale
+      optimized = twoOptImprove(optimized, routeCtx)
 
       if (optimized.some((p, i) => p.id !== greedyPatients[i].id)) {
         const rebuilt = computeRouteOrder(optimized, routeCtx)
@@ -687,10 +687,50 @@ export async function generateSchedule({
               done:                 false,
             })
           }
-          currentLat = optimized[optimized.length - 1].lat
-          currentLng = optimized[optimized.length - 1].lng
         }
       }
+    }
+
+    // ── Insertion forcée des patients non planifiés par le greedy ────────────
+    // Le greedy peut rater un patient si la journée était déjà avancée quand
+    // son tour est venu. On tente ici de l'insérer à la position de moindre coût.
+    const unvisitedToday = todayPatients.filter((p) => !visitedToday.has(p.id))
+    for (const p of unvisitedToday) {
+      if (visits.length >= maxVisits) break
+      const currentPts = visits.map((v) => patientById.get(v.patient_id)).filter(Boolean)
+
+      let bestPos = -1
+      let bestTravel = Infinity
+      for (let pos = 0; pos <= currentPts.length; pos++) {
+        const candidate = [...currentPts.slice(0, pos), p, ...currentPts.slice(pos)]
+        const r = computeRouteOrder(candidate, routeCtx)
+        if (r && r.totalTravel < bestTravel) { bestTravel = r.totalTravel; bestPos = pos }
+      }
+
+      if (bestPos >= 0) {
+        const newPts = [...currentPts.slice(0, bestPos), p, ...currentPts.slice(bestPos)]
+        const r = computeRouteOrder(newPts, routeCtx)
+        if (r) {
+          visits.length = 0
+          for (const { patient: pt, visitStart, visitEnd, travelMin, travelKm } of r.schedule) {
+            visits.push({
+              patient_id: pt.id, patient_name: pt.full_name, address: pt.address,
+              lat: pt.lat, lng: pt.lng,
+              start_time: formatMinutes(visitStart), end_time: formatMinutes(visitEnd),
+              session_duration_min: Number(pt.session_duration_min ?? 30),
+              estimated_travel_min: travelMin + travelBuffer,
+              estimated_km: travelKm, is_fixed: pt.is_fixed ?? false, done: false,
+            })
+          }
+          visitedToday.add(p.id)
+        }
+      }
+    }
+
+    // Mettre à jour la position courante depuis le dernier patient planifié
+    if (visits.length > 0) {
+      currentLat = visits[visits.length - 1].lat
+      currentLng = visits[visits.length - 1].lng
     }
 
     // Retour (endLat/endLng déclarés plus haut pour les optimisations)
@@ -868,11 +908,36 @@ export async function generateSchedule({
     { total_visits: 0, total_travel_min: 0, total_session_min: 0, total_km: 0 }
   )
 
+  // ── Patients non planifiés avec raison ───────────────────────────────────────
+  const scheduledIds = new Set(result.flatMap((d) => d.visits.map((v) => v.patient_id)))
+  const REASON_LABELS = {
+    no_coords:    'Adresse non géolocalisée',
+    absent:       'Absent toute la semaine',
+    unavailable:  'Indisponible tous les jours activés',
+    no_room:      'Journées trop chargées — aucune place trouvée',
+  }
+  const unscheduled = patients
+    .filter((p) => p.active && Number(p.sessions_per_week ?? 1) > 0 && !scheduledIds.has(p.id))
+    .map((p) => {
+      let reason = 'no_room'
+      if (!p.lat || !p.lng) reason = 'no_coords'
+      else if (enabledDays.every((d) => fullDayAbsenceSet.has(`${p.id}|${d.date}`))) reason = 'absent'
+      else if (enabledDays.every((d) => (p.availability?.[d.key] ?? {}).unavailable === true)) reason = 'unavailable'
+      return {
+        patient_id: p.id,
+        patient_name: p.full_name,
+        sessions_per_week: p.sessions_per_week,
+        reason,
+        reason_label: REASON_LABELS[reason],
+      }
+    })
+
   return {
     week_start:     weekStart,
     generated_at:   new Date().toISOString(),
     routing_source: routingSource,
     week_stats:     weekStats,
     days:           result,
+    unscheduled,
   }
 }

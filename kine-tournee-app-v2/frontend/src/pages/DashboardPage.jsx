@@ -48,8 +48,9 @@ export default function DashboardPage({ patients, schedule, weekStart }) {
       return remaining <= 3
     }), [activePatients])
 
-  // Patients non planifiés cette semaine
+  // Patients non planifiés — utilise schedule.unscheduled (avec raison) si dispo
   const plannedIds = new Set(days.flatMap((d) => d.visits.map((v) => v.patient_id)))
+  const unscheduledMap = new Map((schedule?.unscheduled ?? []).map((u) => [u.patient_id, u]))
   const unplanned = activePatients.filter((p) => !plannedIds.has(p.id))
 
   const avgKmPerDay = activeDays.length
@@ -102,15 +103,22 @@ export default function DashboardPage({ patients, schedule, weekStart }) {
           {unplanned.length > 0 && schedule && (
             <>
               <div className="small muted" style={{ marginTop: 4 }}>Non planifiés cette semaine :</div>
-              {unplanned.map((p) => (
-                <div key={p.id} className="alert-row alert-row--blue">
-                  <Avatar name={p.full_name} size={32} />
-                  <div>
-                    <div style={{ fontWeight: 600 }}>{p.full_name}</div>
-                    <div className="small muted">{p.sessions_per_week} séance(s)/semaine attendues</div>
+              {unplanned.map((p) => {
+                const info = unscheduledMap.get(p.id)
+                const reason = info?.reason_label
+                const isNoCoords = info?.reason === 'no_coords'
+                return (
+                  <div key={p.id} className={`alert-row ${isNoCoords ? 'alert-row--orange' : 'alert-row--blue'}`}>
+                    <Avatar name={p.full_name} size={32} />
+                    <div>
+                      <div style={{ fontWeight: 600 }}>{p.full_name}</div>
+                      <div className="small muted">
+                        {reason ?? `${p.sessions_per_week} séance(s)/semaine attendues`}
+                      </div>
+                    </div>
                   </div>
-                </div>
-              ))}
+                )
+              })}
             </>
           )}
         </div>
