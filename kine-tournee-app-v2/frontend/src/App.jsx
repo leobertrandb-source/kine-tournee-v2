@@ -197,8 +197,8 @@ function AppInner() {
               schedule={schedule} setSchedule={setSchedule}
               weekStart={weekStart} setWeekStart={setWeekStart}
               onGenerate={handleGenerate} therapist={therapist}
-              weeklyConfig={weeklyConfig} generating={generating}
-              patients={patients}
+              weeklyConfig={weeklyConfig} setWeeklyConfig={setWeeklyConfig}
+              generating={generating} patients={patients}
             />
           )}
           {tab === 'navigation' && (

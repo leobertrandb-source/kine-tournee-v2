@@ -474,13 +474,15 @@ function DayBlock({ day, therapist, weeklyConfig, completions, onCompletionToggl
 }
 
 // ── Vue semaine drag-and-drop ─────────────────────────────────────────────────
-function WeeklyDragView({ schedule, setSchedule, therapist, weeklyConfig, completions, onCompletionToggle, patients }) {
+function WeeklyDragView({ schedule, setSchedule, therapist, weeklyConfig, setWeeklyConfig, completions, onCompletionToggle, patients }) {
+  const toast = useToast()
   const [dragging, setDragging]     = useState(null)
   // { type:'patient', patientId } | { type:'visit', sourceDay, sourceIdx }
   const [dropTarget, setDropTarget] = useState(null)
   // { dayKey, insertIdx }
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const saveTimerRef = useRef(null)
+  const saveTimerRef    = useRef(null)
+  const cfgTimerRef     = useRef(null)
 
   const days          = schedule?.days ?? []
   const activePatients = useMemo(() => (patients ?? []).filter((p) => p.active), [patients])
@@ -490,11 +492,38 @@ function WeeklyDragView({ schedule, setSchedule, therapist, weeklyConfig, comple
   )
 
   function getWorkStart(dayKey) { return weeklyConfig?.[dayKey]?.work_start ?? '08:00' }
+  function getWorkEnd(dayKey)   { return weeklyConfig?.[dayKey]?.work_end   ?? '19:00' }
   function getBuffer()          { return therapist?.session_buffer_min ?? 5 }
 
   function saveDebounced(updated, weekStart) {
     clearTimeout(saveTimerRef.current)
     saveTimerRef.current = setTimeout(() => api.saveSchedule(weekStart, updated).catch(() => {}), 1500)
+  }
+
+  // Mise à jour heure départ/fin d'un jour — persiste dans weeklyConfig
+  function updateDayTime(dayKey, field, value) {
+    // Mettre à jour le state local immédiatement
+    setWeeklyConfig((prev) => ({
+      ...prev,
+      [dayKey]: { ...(prev[dayKey] || {}), [field]: value },
+    }))
+    // Si on change l'heure de départ, recalculer les horaires de ce jour
+    if (field === 'work_start') {
+      const day = days.find((d) => d.day === dayKey)
+      if (day) {
+        const calc = recalcTimes(day.visits, value, getBuffer())
+        setSchedule((prev) => {
+          const updated = { ...prev, days: prev.days.map((d) => d.day === dayKey ? { ...d, visits: calc } : d) }
+          saveDebounced(updated, prev.week_start)
+          return updated
+        })
+      }
+    }
+    // Sauvegarder la config dans Supabase (debounce 800ms)
+    clearTimeout(cfgTimerRef.current)
+    cfgTimerRef.current = setTimeout(() => {
+      api.updateDayConfig(dayKey, { [field]: value }).catch(() => {})
+    }, 800)
   }
 
   function applyOneDay(dayKey, newVisits) {
@@ -624,7 +653,10 @@ function WeeklyDragView({ schedule, setSchedule, therapist, weeklyConfig, comple
                   <Avatar name={p.full_name} size={26} />
                   <div className="patient-chip-info">
                     <div className="patient-chip-name" title={p.full_name}>{p.full_name}</div>
-                    {isScheduled && <span className="badge badge-green badge-xs">✓ planifié</span>}
+                    <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 2 }}>
+                      {isScheduled && <span className="badge badge-green badge-xs">✓</span>}
+                      {p.sessions_per_week > 1 && <span className="badge badge-inactive badge-xs">{p.sessions_per_week}×/sem</span>}
+                    </div>
                   </div>
                 </div>
               )
@@ -643,6 +675,15 @@ function WeeklyDragView({ schedule, setSchedule, therapist, weeklyConfig, comple
           const dayLabel  = DAY_LABELS_FR[day.day] || day.day
           const dateLabel = new Date(day.date + 'T00:00:00').toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })
           const doneCount = day.visits.filter((v) => completions[`${v.patient_id}|${day.date}`]?.done ?? v.done).length
+          const cfg       = weeklyConfig?.[day.day] || {}
+          const startLat  = cfg.start_lat  ?? therapist?.default_start_lat
+          const startLng  = cfg.start_lng  ?? therapist?.default_start_lng
+          const endLat    = cfg.end_lat    ?? therapist?.default_end_lat
+          const endLng    = cfg.end_lng    ?? therapist?.default_end_lng
+          const workStart = getWorkStart(day.day)
+          const workEnd   = getWorkEnd(day.day)
+          const travelMin = day.stats?.total_travel_min
+          const kmDay     = day.stats?.total_km
 
           return (
             <div
@@ -651,27 +692,64 @@ function WeeklyDragView({ schedule, setSchedule, therapist, weeklyConfig, comple
               onDragOver={(e) => handleDragOverColumn(e, day.day)}
               onDrop={(e) => handleDrop(e, day.day)}
             >
+              {/* En-tête colonne */}
               <div className="week-col-header">
                 <div className="week-col-day-name">{dayLabel}</div>
                 <div className="week-col-date">{dateLabel}</div>
-                <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+
+                {/* Heure départ / fin */}
+                <div className="week-col-times">
+                  <label className="week-time-label" title="Heure de départ">
+                    ▶
+                    <input
+                      type="time"
+                      className="week-time-input"
+                      value={workStart}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => updateDayTime(day.day, 'work_start', e.target.value)}
+                    />
+                  </label>
+                  <label className="week-time-label" title="Heure de fin">
+                    ◀
+                    <input
+                      type="time"
+                      className="week-time-input"
+                      value={workEnd}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => updateDayTime(day.day, 'work_end', e.target.value)}
+                    />
+                  </label>
+                </div>
+
+                {/* Badges stats */}
+                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 5 }}>
                   <span className={`badge badge-xs ${doneCount === day.visits.length && day.visits.length > 0 ? 'badge-green' : 'badge-inactive'}`}>
                     {doneCount}/{day.visits.length}
                   </span>
-                  {day.stats?.total_km != null && (
-                    <span className="badge badge-xs badge-blue">{day.stats.total_km} km</span>
-                  )}
+                  {kmDay != null && <span className="badge badge-xs badge-blue">{kmDay} km</span>}
+                  {travelMin != null && <span className="badge badge-xs" style={{ background: '#f3e8ff', color: '#7c3aed' }}>{travelMin} min</span>}
                 </div>
+
+                {/* Bouton lancer la tournée */}
+                {day.visits.length > 0 && (
+                  <button
+                    className="week-col-launch"
+                    onClick={() => launchFullRoute(day.visits, startLat, startLng, endLat, endLng)}
+                  >
+                    🚀 Lancer la tournée
+                  </button>
+                )}
               </div>
 
+              {/* Corps colonne — visites */}
               <div className="week-col-body">
                 {isDropActive && dropTarget.insertIdx === 0 && <div className="week-drop-indicator" />}
 
                 {day.visits.map((v, i) => {
-                  const key      = `${v.patient_id}|${day.date}`
-                  const isDone   = completions[key]?.done ?? v.done
-                  const isDrag   = dragging?.type === 'visit' && dragging.sourceDay === day.day && dragging.sourceIdx === i
-                  const color    = getColor(v.patient_name)
+                  const key    = `${v.patient_id}|${day.date}`
+                  const isDone = completions[key]?.done ?? v.done
+                  const isDrag = dragging?.type === 'visit' && dragging.sourceDay === day.day && dragging.sourceIdx === i
+                  const color  = getColor(v.patient_name)
                   return (
                     <div key={`${v.patient_id}-${i}`}>
                       <div
@@ -681,24 +759,33 @@ function WeeklyDragView({ schedule, setSchedule, therapist, weeklyConfig, comple
                         onDragStart={(e) => handleDragStartVisit(e, day.day, i)}
                         onDragOver={(e) => handleDragOverCard(e, day.day, i)}
                       >
-                        <div style={{ display: 'flex', gap: 4, alignItems: 'flex-start' }}>
-                          <div style={{ flex: 1, minWidth: 0 }}>
-                            <div className="week-visit-name" title={v.patient_name}>{v.patient_name}</div>
-                            <div className="week-visit-time">{v.start_time} – {v.end_time}</div>
-                            <div className="week-visit-time">{v.session_duration_min} min</div>
-                          </div>
-                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
-                            <input
-                              type="checkbox"
-                              checked={isDone}
-                              className="visit-check"
-                              style={{ width: 14, height: 14 }}
-                              onChange={() => onCompletionToggle(v.patient_id, day.date, !isDone)}
-                              onClick={(e) => e.stopPropagation()}
-                            />
-                            <button className="week-visit-remove" onClick={() => removeVisit(day.day, i)} title="Retirer">✕</button>
-                          </div>
+                        {/* Ligne 1 : nom + actions */}
+                        <div style={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}>
+                          <div className="week-visit-name" style={{ flex: 1 }} title={v.patient_name}>{v.patient_name}</div>
+                          <input
+                            type="checkbox"
+                            checked={isDone}
+                            className="visit-check"
+                            style={{ width: 13, height: 13, flexShrink: 0, marginTop: 1 }}
+                            onChange={() => onCompletionToggle(v.patient_id, day.date, !isDone)}
+                            onClick={(e) => e.stopPropagation()}
+                          />
+                          <button className="week-visit-remove" onClick={() => removeVisit(day.day, i)} title="Retirer">✕</button>
                         </div>
+                        {/* Ligne 2 : horaire + durée */}
+                        <div className="week-visit-time">{v.start_time} – {v.end_time} · {v.session_duration_min} min</div>
+                        {/* Ligne 3 : adresse + GPS */}
+                        {v.address && (
+                          <div className="week-visit-addr-row">
+                            <span className="week-visit-addr" title={v.address}>{v.address}</span>
+                            {v.lat && v.lng && (
+                              <span className="week-visit-gps">
+                                <button className="week-gps-btn" onClick={() => navigateTo(v.lat, v.lng)} title="Google Maps">🗺</button>
+                                <button className="week-gps-btn" onClick={() => navigateWaze(v.lat, v.lng)} title="Waze">🚗</button>
+                              </span>
+                            )}
+                          </div>
+                        )}
                       </div>
                       {isDropActive && dropTarget.insertIdx === i + 1 && <div className="week-drop-indicator" />}
                     </div>
@@ -747,7 +834,7 @@ function WeekStats({ weekStats, routingSource }) {
 }
 
 // ── Page principale ───────────────────────────────────────────────────────────
-export default function SchedulePage({ schedule, setSchedule, weekStart, setWeekStart, onGenerate, therapist, weeklyConfig, generating, patients }) {
+export default function SchedulePage({ schedule, setSchedule, weekStart, setWeekStart, onGenerate, therapist, weeklyConfig, setWeeklyConfig, generating, patients }) {
   const toast = useToast()
   const [completions, setCompletions] = useState({})
   const [saving, setSaving] = useState(false)
@@ -920,6 +1007,7 @@ export default function SchedulePage({ schedule, setSchedule, weekStart, setWeek
               setSchedule={setSchedule}
               therapist={therapist}
               weeklyConfig={weeklyConfig}
+              setWeeklyConfig={setWeeklyConfig}
               completions={completions}
               onCompletionToggle={handleCompletionToggle}
               patients={patients || []}

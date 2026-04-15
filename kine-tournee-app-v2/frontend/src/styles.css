@@ -1017,6 +1017,57 @@ pre { overflow: auto; background: #0f172a; color: #e5eef7; padding: 12px; border
 .week-visit-card--done { opacity: .45; }
 .week-visit-card--dragging { opacity: .25; cursor: grabbing; }
 
+/* Column header — time inputs & launch */
+.week-col-times {
+  display: flex;
+  gap: 4px;
+  margin-top: 6px;
+  flex-wrap: wrap;
+}
+.week-time-label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: default;
+  flex: 1;
+  min-width: 0;
+}
+.week-time-input {
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  padding: 2px 4px;
+  font-size: 11px;
+  color: var(--text);
+  background: var(--surface);
+  width: 100%;
+  min-width: 0;
+  cursor: pointer;
+  transition: border-color .15s;
+}
+.week-time-input:focus { outline: none; border-color: var(--green); }
+
+.week-col-launch {
+  width: 100%;
+  margin-top: 6px;
+  padding: 5px 6px;
+  background: var(--green);
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .15s;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.week-col-launch:hover { background: var(--green-dark); }
+
+/* Visit cards */
 .week-visit-name {
   font-size: 12px;
   font-weight: 700;
@@ -1024,7 +1075,35 @@ pre { overflow: auto; background: #0f172a; color: #e5eef7; padding: 12px; border
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.week-visit-time { font-size: 11px; color: var(--muted); margin-top: 1px; }
+.week-visit-time { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+.week-visit-addr-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+}
+.week-visit-addr {
+  font-size: 10px;
+  color: var(--muted-light);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+.week-visit-gps { display: flex; gap: 2px; flex-shrink: 0; }
+.week-gps-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 0 1px;
+  line-height: 1;
+  opacity: .7;
+  transition: opacity .1s, transform .1s;
+}
+.week-gps-btn:hover { opacity: 1; transform: scale(1.15); }
 
 .week-visit-remove {
   background: none;
@@ -1036,6 +1115,7 @@ pre { overflow: auto; background: #0f172a; color: #e5eef7; padding: 12px; border
   line-height: 1;
   opacity: .55;
   border-radius: 3px;
+  flex-shrink: 0;
 }
 .week-visit-remove:hover { color: var(--red); opacity: 1; background: var(--red-light); }
 
