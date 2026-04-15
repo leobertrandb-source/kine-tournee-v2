@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { api } from '../lib/api'
 import { getCurrentPosition, launchFullRoute, navigateTo, navigateWaze } from '../lib/gps'
 import { useToast } from '../components/Toast'
@@ -473,6 +473,250 @@ function DayBlock({ day, therapist, weeklyConfig, completions, onCompletionToggl
   )
 }
 
+// ── Vue semaine drag-and-drop ─────────────────────────────────────────────────
+function WeeklyDragView({ schedule, setSchedule, therapist, weeklyConfig, completions, onCompletionToggle, patients }) {
+  const [dragging, setDragging]     = useState(null)
+  // { type:'patient', patientId } | { type:'visit', sourceDay, sourceIdx }
+  const [dropTarget, setDropTarget] = useState(null)
+  // { dayKey, insertIdx }
+  const [sidebarOpen, setSidebarOpen] = useState(true)
+  const saveTimerRef = useRef(null)
+
+  const days          = schedule?.days ?? []
+  const activePatients = useMemo(() => (patients ?? []).filter((p) => p.active), [patients])
+  const scheduledIds   = useMemo(
+    () => new Set(days.flatMap((d) => d.visits.map((v) => v.patient_id))),
+    [days]
+  )
+
+  function getWorkStart(dayKey) { return weeklyConfig?.[dayKey]?.work_start ?? '08:00' }
+  function getBuffer()          { return therapist?.session_buffer_min ?? 5 }
+
+  function saveDebounced(updated, weekStart) {
+    clearTimeout(saveTimerRef.current)
+    saveTimerRef.current = setTimeout(() => api.saveSchedule(weekStart, updated).catch(() => {}), 1500)
+  }
+
+  function applyOneDay(dayKey, newVisits) {
+    const calc = recalcTimes(newVisits, getWorkStart(dayKey), getBuffer())
+    setSchedule((prev) => {
+      const updated = { ...prev, days: prev.days.map((d) => d.day === dayKey ? { ...d, visits: calc } : d) }
+      saveDebounced(updated, prev.week_start)
+      return updated
+    })
+  }
+
+  function applyTwoDays(dkA, visA, dkB, visB) {
+    const calcA = recalcTimes(visA, getWorkStart(dkA), getBuffer())
+    const calcB = recalcTimes(visB, getWorkStart(dkB), getBuffer())
+    setSchedule((prev) => {
+      const updated = {
+        ...prev,
+        days: prev.days.map((d) => {
+          if (d.day === dkA) return { ...d, visits: calcA }
+          if (d.day === dkB) return { ...d, visits: calcB }
+          return d
+        }),
+      }
+      saveDebounced(updated, prev.week_start)
+      return updated
+    })
+  }
+
+  function handleDragStartPatient(e, patient) {
+    setDragging({ type: 'patient', patientId: patient.id })
+    e.dataTransfer.effectAllowed = 'copy'
+  }
+
+  function handleDragStartVisit(e, dayKey, visitIdx) {
+    setDragging({ type: 'visit', sourceDay: dayKey, sourceIdx: visitIdx })
+    e.dataTransfer.effectAllowed = 'move'
+  }
+
+  function handleDragOverColumn(e, dayKey) {
+    e.preventDefault()
+    const n = days.find((d) => d.day === dayKey)?.visits.length ?? 0
+    if (!dropTarget || dropTarget.dayKey !== dayKey || dropTarget.insertIdx !== n)
+      setDropTarget({ dayKey, insertIdx: n })
+  }
+
+  function handleDragOverCard(e, dayKey, visitIdx) {
+    e.preventDefault()
+    e.stopPropagation()
+    const rect     = e.currentTarget.getBoundingClientRect()
+    const insertIdx = e.clientY < rect.top + rect.height / 2 ? visitIdx : visitIdx + 1
+    if (!dropTarget || dropTarget.dayKey !== dayKey || dropTarget.insertIdx !== insertIdx)
+      setDropTarget({ dayKey, insertIdx })
+  }
+
+  function handleDrop(e, dayKey) {
+    e.preventDefault()
+    if (!dragging) return
+    const targetDay = days.find((d) => d.day === dayKey)
+    if (!targetDay) { reset(); return }
+
+    const insertIdx = dropTarget?.dayKey === dayKey ? dropTarget.insertIdx : targetDay.visits.length
+
+    if (dragging.type === 'patient') {
+      const p = activePatients.find((pt) => pt.id === dragging.patientId)
+      if (!p || targetDay.visits.some((v) => v.patient_id === p.id)) { reset(); return }
+      const newVisit = {
+        patient_id: p.id, patient_name: p.full_name, address: p.address,
+        lat: p.lat ?? null, lng: p.lng ?? null,
+        session_duration_min: p.session_duration_min ?? 30,
+        estimated_travel_min: 10, estimated_km: null, done: false, is_fixed: false,
+      }
+      const newVisits = [...targetDay.visits.slice(0, insertIdx), newVisit, ...targetDay.visits.slice(insertIdx)]
+      applyOneDay(dayKey, newVisits)
+
+    } else if (dragging.type === 'visit') {
+      const sourceDay = days.find((d) => d.day === dragging.sourceDay)
+      if (!sourceDay) { reset(); return }
+      const visit = sourceDay.visits[dragging.sourceIdx]
+      if (!visit) { reset(); return }
+
+      if (dragging.sourceDay === dayKey) {
+        // Reorder within same day
+        const nv = [...sourceDay.visits]
+        const [moved] = nv.splice(dragging.sourceIdx, 1)
+        nv.splice(insertIdx > dragging.sourceIdx ? insertIdx - 1 : insertIdx, 0, moved)
+        applyOneDay(dayKey, nv)
+      } else {
+        // Cross-day move
+        if (targetDay.visits.some((v) => v.patient_id === visit.patient_id)) { reset(); return }
+        const srcVisits = sourceDay.visits.filter((_, i) => i !== dragging.sourceIdx)
+        const tgtVisits = [...targetDay.visits.slice(0, insertIdx), visit, ...targetDay.visits.slice(insertIdx)]
+        applyTwoDays(dragging.sourceDay, srcVisits, dayKey, tgtVisits)
+      }
+    }
+    reset()
+  }
+
+  function reset() { setDragging(null); setDropTarget(null) }
+
+  function removeVisit(dayKey, visitIdx) {
+    const day = days.find((d) => d.day === dayKey)
+    if (day) applyOneDay(dayKey, day.visits.filter((_, i) => i !== visitIdx))
+  }
+
+  return (
+    <div className="week-drag-view" onDragEnd={reset}>
+      {/* ── Sidebar patients ── */}
+      <div className={`week-sidebar${sidebarOpen ? '' : ' week-sidebar--collapsed'}`}>
+        <div className="week-sidebar-header">
+          {sidebarOpen && <span>Patients ({activePatients.length})</span>}
+          <button className="week-sidebar-toggle" onClick={() => setSidebarOpen((v) => !v)}>
+            {sidebarOpen ? '◀' : '▶'}
+          </button>
+        </div>
+        {sidebarOpen && (
+          <div className="week-sidebar-list">
+            {activePatients.map((p) => {
+              const isScheduled = scheduledIds.has(p.id)
+              const isDragging  = dragging?.type === 'patient' && dragging.patientId === p.id
+              return (
+                <div
+                  key={p.id}
+                  className={`patient-chip${isDragging ? ' patient-chip--dragging' : ''}`}
+                  draggable
+                  onDragStart={(e) => handleDragStartPatient(e, p)}
+                >
+                  <Avatar name={p.full_name} size={26} />
+                  <div className="patient-chip-info">
+                    <div className="patient-chip-name" title={p.full_name}>{p.full_name}</div>
+                    {isScheduled && <span className="badge badge-green badge-xs">✓ planifié</span>}
+                  </div>
+                </div>
+              )
+            })}
+            {activePatients.length === 0 && (
+              <div className="small muted" style={{ padding: '8px 4px', textAlign: 'center' }}>Aucun patient actif</div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* ── Colonnes jours ── */}
+      <div className="week-columns">
+        {days.map((day) => {
+          const isDropActive = dropTarget?.dayKey === day.day
+          const dayLabel  = DAY_LABELS_FR[day.day] || day.day
+          const dateLabel = new Date(day.date + 'T00:00:00').toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })
+          const doneCount = day.visits.filter((v) => completions[`${v.patient_id}|${day.date}`]?.done ?? v.done).length
+
+          return (
+            <div
+              key={day.date}
+              className={`week-col${isDropActive ? ' week-col--drop-active' : ''}`}
+              onDragOver={(e) => handleDragOverColumn(e, day.day)}
+              onDrop={(e) => handleDrop(e, day.day)}
+            >
+              <div className="week-col-header">
+                <div className="week-col-day-name">{dayLabel}</div>
+                <div className="week-col-date">{dateLabel}</div>
+                <div style={{ marginTop: 4, display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                  <span className={`badge badge-xs ${doneCount === day.visits.length && day.visits.length > 0 ? 'badge-green' : 'badge-inactive'}`}>
+                    {doneCount}/{day.visits.length}
+                  </span>
+                  {day.stats?.total_km != null && (
+                    <span className="badge badge-xs badge-blue">{day.stats.total_km} km</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="week-col-body">
+                {isDropActive && dropTarget.insertIdx === 0 && <div className="week-drop-indicator" />}
+
+                {day.visits.map((v, i) => {
+                  const key      = `${v.patient_id}|${day.date}`
+                  const isDone   = completions[key]?.done ?? v.done
+                  const isDrag   = dragging?.type === 'visit' && dragging.sourceDay === day.day && dragging.sourceIdx === i
+                  const color    = getColor(v.patient_name)
+                  return (
+                    <div key={`${v.patient_id}-${i}`}>
+                      <div
+                        className={`week-visit-card${isDone ? ' week-visit-card--done' : ''}${isDrag ? ' week-visit-card--dragging' : ''}`}
+                        style={{ borderLeft: `3px solid ${color}` }}
+                        draggable
+                        onDragStart={(e) => handleDragStartVisit(e, day.day, i)}
+                        onDragOver={(e) => handleDragOverCard(e, day.day, i)}
+                      >
+                        <div style={{ display: 'flex', gap: 4, alignItems: 'flex-start' }}>
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div className="week-visit-name" title={v.patient_name}>{v.patient_name}</div>
+                            <div className="week-visit-time">{v.start_time} – {v.end_time}</div>
+                            <div className="week-visit-time">{v.session_duration_min} min</div>
+                          </div>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: 2, flexShrink: 0 }}>
+                            <input
+                              type="checkbox"
+                              checked={isDone}
+                              className="visit-check"
+                              style={{ width: 14, height: 14 }}
+                              onChange={() => onCompletionToggle(v.patient_id, day.date, !isDone)}
+                              onClick={(e) => e.stopPropagation()}
+                            />
+                            <button className="week-visit-remove" onClick={() => removeVisit(day.day, i)} title="Retirer">✕</button>
+                          </div>
+                        </div>
+                      </div>
+                      {isDropActive && dropTarget.insertIdx === i + 1 && <div className="week-drop-indicator" />}
+                    </div>
+                  )
+                })}
+
+                {day.visits.length === 0 && (
+                  <div className="week-col-empty">{isDropActive ? 'Déposer ici' : 'Glissez un patient'}</div>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 // ── Stats semaine ─────────────────────────────────────────────────────────────
 function WeekStats({ weekStats, routingSource }) {
   if (!weekStats) return null
@@ -637,8 +881,9 @@ export default function SchedulePage({ schedule, setSchedule, weekStart, setWeek
               )}
               <button className="btn-notify" onClick={() => setShowNotify(true)} title="Envoyer les horaires aux patients">📱 Notifier</button>
               <div className="view-toggle">
-                <button className={viewMode === 'table' ? 'active' : ''} onClick={() => setViewMode('table')}>≡ Liste</button>
+                <button className={viewMode === 'table'    ? 'active' : ''} onClick={() => setViewMode('table')}>≡ Liste</button>
                 <button className={viewMode === 'timeline' ? 'active' : ''} onClick={() => setViewMode('timeline')}>⏱ Timeline</button>
+                <button className={viewMode === 'week'     ? 'active' : ''} onClick={() => setViewMode('week')}>📅 Semaine</button>
               </div>
               <button className="secondary small-btn" onClick={() => window.print()}>🖨</button>
             </>
@@ -669,12 +914,24 @@ export default function SchedulePage({ schedule, setSchedule, weekStart, setWeek
             </div>
           )}
           <WeekStats weekStats={schedule.week_stats} routingSource={schedule.routing_source} />
-          {schedule.days.map((day) => (
-            <DayBlock key={day.date} day={day} therapist={therapist} weeklyConfig={weeklyConfig}
-              completions={completions} onCompletionToggle={handleCompletionToggle}
-              onVisitsReorder={handleVisitsReorder} viewMode={viewMode} userPosition={userPosition}
-              patients={patients || []} />
-          ))}
+          {viewMode === 'week' ? (
+            <WeeklyDragView
+              schedule={schedule}
+              setSchedule={setSchedule}
+              therapist={therapist}
+              weeklyConfig={weeklyConfig}
+              completions={completions}
+              onCompletionToggle={handleCompletionToggle}
+              patients={patients || []}
+            />
+          ) : (
+            schedule.days.map((day) => (
+              <DayBlock key={day.date} day={day} therapist={therapist} weeklyConfig={weeklyConfig}
+                completions={completions} onCompletionToggle={handleCompletionToggle}
+                onVisitsReorder={handleVisitsReorder} viewMode={viewMode} userPosition={userPosition}
+                patients={patients || []} />
+            ))
+          )}
           <div className="print-only print-header">
             <h1>Tournée — Semaine du {weekStart}</h1>
             {schedule.week_stats && <p>{schedule.week_stats.total_visits} visites · {schedule.week_stats.total_km} km · {new Date(schedule.generated_at).toLocaleDateString('fr-FR')}</p>}
