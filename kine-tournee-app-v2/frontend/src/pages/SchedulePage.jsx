@@ -473,16 +473,65 @@ function DayBlock({ day, therapist, weeklyConfig, completions, onCompletionToggl
   )
 }
 
+// ── Timeline constants + client-side route optimizer ──────────────────────────
+const TL_START = 7 * 60    // 07:00
+const TL_END   = 20 * 60   // 20:00
+const TL_SPAN  = TL_END - TL_START   // 780 min
+const TL_H     = 975        // px — 13 h × 75 px/h
+
+function minToTopPx(min) { return ((min - TL_START) / TL_SPAN) * TL_H }
+function durToHPx(dur)   { return Math.max(22, (dur / TL_SPAN) * TL_H) }
+function snapMin(m)       { return Math.round(m / 15) * 15 }
+
+function haversineKm(a1, o1, a2, o2) {
+  const R = 6371, r = Math.PI / 180
+  const da = (a2 - a1) * r, dо = (o2 - o1) * r
+  const a = Math.sin(da / 2) ** 2 + Math.cos(a1 * r) * Math.cos(a2 * r) * Math.sin(dо / 2) ** 2
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))
+}
+
+function optimizeDayVisits(visits, sLat, sLng, eLat, eLng) {
+  const rot = visits.filter((v) => v.lat && v.lng)
+  const no  = visits.filter((v) => !v.lat || !v.lng)
+  if (rot.length <= 1) return visits
+  // Greedy nearest-neighbor
+  let rem = [...rot], ord = []
+  let cLat = sLat ?? rot[0].lat, cLng = sLng ?? rot[0].lng
+  while (rem.length) {
+    let bi = 0, bd = Infinity
+    rem.forEach((v, i) => { const d = haversineKm(cLat, cLng, v.lat, v.lng); if (d < bd) { bd = d; bi = i } })
+    const [nx] = rem.splice(bi, 1); ord.push(nx); cLat = nx.lat; cLng = nx.lng
+  }
+  // 2-opt
+  let imp = true
+  while (imp) {
+    imp = false
+    for (let i = 0; i < ord.length - 1 && !imp; i++) {
+      for (let j = i + 2; j < ord.length; j++) {
+        const pLat = i > 0 ? ord[i-1].lat : (sLat ?? ord[0].lat)
+        const pLng = i > 0 ? ord[i-1].lng : (sLng ?? ord[0].lng)
+        const nLat = j < ord.length - 1 ? ord[j+1].lat : (eLat ?? ord[j].lat)
+        const nLng = j < ord.length - 1 ? ord[j+1].lng : (eLng ?? ord[j].lng)
+        const bef = haversineKm(pLat, pLng, ord[i].lat, ord[i].lng) + haversineKm(ord[j].lat, ord[j].lng, nLat, nLng)
+        const aft = haversineKm(pLat, pLng, ord[j].lat, ord[j].lng) + haversineKm(ord[i].lat, ord[i].lng, nLat, nLng)
+        if (aft < bef - 0.05) { ord = [...ord.slice(0,i), ...ord.slice(i,j+1).reverse(), ...ord.slice(j+1)]; imp = true; break }
+      }
+    }
+  }
+  return [...ord, ...no]
+}
+
 // ── Vue semaine drag-and-drop ─────────────────────────────────────────────────
 function WeeklyDragView({ schedule, setSchedule, therapist, weeklyConfig, setWeeklyConfig, completions, onCompletionToggle, patients }) {
   const toast = useToast()
-  const [dragging, setDragging]     = useState(null)
-  // { type:'patient', patientId } | { type:'visit', sourceDay, sourceIdx }
-  const [dropTarget, setDropTarget] = useState(null)
-  // { dayKey, insertIdx }
+  const [dragging, setDragging]       = useState(null)
+  const [dropTarget, setDropTarget]   = useState(null)  // { dayKey, insertIdx } cards mode
+  const [dropTime, setDropTime]       = useState(null)  // { dayKey, min }       timeline mode
   const [sidebarOpen, setSidebarOpen] = useState(true)
-  const saveTimerRef    = useRef(null)
-  const cfgTimerRef     = useRef(null)
+  const [viewMode, setViewMode]       = useState('cards') // 'cards' | 'timeline'
+  const saveTimerRef = useRef(null)
+  const cfgTimerRef  = useRef(null)
+  const tlScrollRef  = useRef(null)
 
   const days          = schedule?.days ?? []
   const activePatients = useMemo(() => (patients ?? []).filter((p) => p.active), [patients])
@@ -552,6 +601,46 @@ function WeeklyDragView({ schedule, setSchedule, therapist, weeklyConfig, setWee
     })
   }
 
+  // ── Timeline: applique sans recalcTimes (temps manuels) ──────────────────────
+  function applyOneDayDirect(dayKey, newVisits) {
+    const sorted = [...newVisits].sort((a, b) => parseMin(a.start_time) - parseMin(b.start_time))
+    setSchedule((prev) => {
+      const updated = { ...prev, days: prev.days.map((d) => d.day === dayKey ? { ...d, visits: sorted } : d) }
+      saveDebounced(updated, prev.week_start)
+      return updated
+    })
+  }
+  function applyTwoDaysDirect(dkA, visA, dkB, visB) {
+    const sA = [...visA].sort((a, b) => parseMin(a.start_time) - parseMin(b.start_time))
+    const sB = [...visB].sort((a, b) => parseMin(a.start_time) - parseMin(b.start_time))
+    setSchedule((prev) => {
+      const updated = { ...prev, days: prev.days.map((d) => {
+        if (d.day === dkA) return { ...d, visits: sA }
+        if (d.day === dkB) return { ...d, visits: sB }
+        return d
+      }) }
+      saveDebounced(updated, prev.week_start)
+      return updated
+    })
+  }
+
+  // ── Optimiser l'ordre d'une journée (greedy NN + 2-opt) ───────────────────
+  function handleOptimizeDay(dayKey) {
+    const day = days.find((d) => d.day === dayKey)
+    if (!day || day.visits.length < 2) return
+    const cfg = weeklyConfig?.[dayKey] || {}
+    const optimized = optimizeDayVisits(
+      day.visits,
+      cfg.start_lat ?? therapist?.default_start_lat,
+      cfg.start_lng ?? therapist?.default_start_lng,
+      cfg.end_lat   ?? therapist?.default_end_lat,
+      cfg.end_lng   ?? therapist?.default_end_lng,
+    )
+    applyOneDay(dayKey, optimized)
+    toast.success('Itinéraire optimisé ✓')
+  }
+
+  // ── DnD cards mode ────────────────────────────────────────────────────────
   function handleDragStartPatient(e, patient) {
     setDragging({ type: 'patient', patientId: patient.id })
     e.dataTransfer.effectAllowed = 'copy'
@@ -572,10 +661,55 @@ function WeeklyDragView({ schedule, setSchedule, therapist, weeklyConfig, setWee
   function handleDragOverCard(e, dayKey, visitIdx) {
     e.preventDefault()
     e.stopPropagation()
-    const rect     = e.currentTarget.getBoundingClientRect()
+    const rect      = e.currentTarget.getBoundingClientRect()
     const insertIdx = e.clientY < rect.top + rect.height / 2 ? visitIdx : visitIdx + 1
     if (!dropTarget || dropTarget.dayKey !== dayKey || dropTarget.insertIdx !== insertIdx)
       setDropTarget({ dayKey, insertIdx })
+  }
+
+  // ── DnD timeline mode ────────────────────────────────────────────────────
+  function handleDragOverTimeline(e, dayKey) {
+    e.preventDefault()
+    e.dataTransfer.dropEffect = 'move'
+    if (!tlScrollRef.current) return
+    const rect = tlScrollRef.current.getBoundingClientRect()
+    const y    = (e.clientY - rect.top) + tlScrollRef.current.scrollTop
+    const min  = Math.max(TL_START, Math.min(TL_END - 15, snapMin(TL_START + (y / TL_H) * TL_SPAN)))
+    if (!dropTime || dropTime.dayKey !== dayKey || dropTime.min !== min) setDropTime({ dayKey, min })
+  }
+
+  function handleDropTimeline(e, dayKey) {
+    e.preventDefault()
+    if (!dragging || !dropTime) { reset(); setDropTime(null); return }
+    const startMin  = dropTime.min
+    const targetDay = days.find((d) => d.day === dayKey)
+    if (!targetDay) { reset(); setDropTime(null); return }
+
+    if (dragging.type === 'patient') {
+      const p = activePatients.find((pt) => pt.id === dragging.patientId)
+      if (!p || targetDay.visits.some((v) => v.patient_id === p.id)) { reset(); setDropTime(null); return }
+      const dur = p.session_duration_min ?? 30
+      const nv  = {
+        patient_id: p.id, patient_name: p.full_name, address: p.address,
+        lat: p.lat ?? null, lng: p.lng ?? null,
+        session_duration_min: dur, estimated_travel_min: 10, estimated_km: null,
+        start_time: fmtMin(startMin), end_time: fmtMin(startMin + dur), done: false, is_fixed: false,
+      }
+      applyOneDayDirect(dayKey, [...targetDay.visits, nv])
+    } else if (dragging.type === 'visit') {
+      const srcDay = days.find((d) => d.day === dragging.sourceDay)
+      const visit  = srcDay?.visits[dragging.sourceIdx]
+      if (!visit) { reset(); setDropTime(null); return }
+      const dur     = visit.session_duration_min ?? 30
+      const updated = { ...visit, start_time: fmtMin(startMin), end_time: fmtMin(startMin + dur) }
+      if (dragging.sourceDay === dayKey) {
+        applyOneDayDirect(dayKey, srcDay.visits.map((v, i) => i === dragging.sourceIdx ? updated : v))
+      } else {
+        if (targetDay.visits.some((v) => v.patient_id === visit.patient_id)) { reset(); setDropTime(null); return }
+        applyTwoDaysDirect(dragging.sourceDay, srcDay.visits.filter((_, i) => i !== dragging.sourceIdx), dayKey, [...targetDay.visits, updated])
+      }
+    }
+    reset(); setDropTime(null)
   }
 
   function handleDrop(e, dayKey) {
@@ -628,9 +762,9 @@ function WeeklyDragView({ schedule, setSchedule, therapist, weeklyConfig, setWee
     if (day) applyOneDay(dayKey, day.visits.filter((_, i) => i !== visitIdx))
   }
 
-  return (
-    <div className="week-drag-view" onDragEnd={reset}>
-      {/* ── Sidebar patients ── */}
+  // ── Shared sidebar + visit card renderers ────────────────────────────────────
+  function renderSidebar() {
+    return (
       <div className={`week-sidebar${sidebarOpen ? '' : ' week-sidebar--collapsed'}`}>
         <div className="week-sidebar-header">
           {sidebarOpen && <span>Patients ({activePatients.length})</span>}
@@ -642,14 +776,10 @@ function WeeklyDragView({ schedule, setSchedule, therapist, weeklyConfig, setWee
           <div className="week-sidebar-list">
             {activePatients.map((p) => {
               const isScheduled = scheduledIds.has(p.id)
-              const isDragging  = dragging?.type === 'patient' && dragging.patientId === p.id
+              const isDrag      = dragging?.type === 'patient' && dragging.patientId === p.id
               return (
-                <div
-                  key={p.id}
-                  className={`patient-chip${isDragging ? ' patient-chip--dragging' : ''}`}
-                  draggable
-                  onDragStart={(e) => handleDragStartPatient(e, p)}
-                >
+                <div key={p.id} className={`patient-chip${isDrag ? ' patient-chip--dragging' : ''}`}
+                  draggable onDragStart={(e) => handleDragStartPatient(e, p)}>
                   <Avatar name={p.full_name} size={26} />
                   <div className="patient-chip-info">
                     <div className="patient-chip-name" title={p.full_name}>{p.full_name}</div>
@@ -661,144 +791,230 @@ function WeeklyDragView({ schedule, setSchedule, therapist, weeklyConfig, setWee
                 </div>
               )
             })}
-            {activePatients.length === 0 && (
-              <div className="small muted" style={{ padding: '8px 4px', textAlign: 'center' }}>Aucun patient actif</div>
-            )}
+            {activePatients.length === 0 && <div className="small muted" style={{ padding: '8px 4px', textAlign: 'center' }}>Aucun patient actif</div>}
           </div>
         )}
       </div>
+    )
+  }
 
-      {/* ── Colonnes jours ── */}
-      <div className="week-columns">
-        {days.map((day) => {
-          const isDropActive = dropTarget?.dayKey === day.day
-          const dayLabel  = DAY_LABELS_FR[day.day] || day.day
-          const dateLabel = new Date(day.date + 'T00:00:00').toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })
-          const doneCount = day.visits.filter((v) => completions[`${v.patient_id}|${day.date}`]?.done ?? v.done).length
-          const cfg       = weeklyConfig?.[day.day] || {}
-          const startLat  = cfg.start_lat  ?? therapist?.default_start_lat
-          const startLng  = cfg.start_lng  ?? therapist?.default_start_lng
-          const endLat    = cfg.end_lat    ?? therapist?.default_end_lat
-          const endLng    = cfg.end_lng    ?? therapist?.default_end_lng
-          const workStart = getWorkStart(day.day)
-          const workEnd   = getWorkEnd(day.day)
-          const travelMin = day.stats?.total_travel_min
-          const kmDay     = day.stats?.total_km
+  function renderDayHeader(day, { showOptimize = true } = {}) {
+    const cfg       = weeklyConfig?.[day.day] || {}
+    const startLat  = cfg.start_lat ?? therapist?.default_start_lat
+    const startLng  = cfg.start_lng ?? therapist?.default_start_lng
+    const endLat    = cfg.end_lat   ?? therapist?.default_end_lat
+    const endLng    = cfg.end_lng   ?? therapist?.default_end_lng
+    const dayLabel  = DAY_LABELS_FR[day.day] || day.day
+    const dateLabel = new Date(day.date + 'T00:00:00').toLocaleDateString('fr-FR', { day: '2-digit', month: 'short' })
+    const doneCount = day.visits.filter((v) => completions[`${v.patient_id}|${day.date}`]?.done ?? v.done).length
+    const travelMin = day.stats?.total_travel_min
+    const kmDay     = day.stats?.total_km
+    return (
+      <>
+        <div className="week-col-day-name">{dayLabel}</div>
+        <div className="week-col-date">{dateLabel}</div>
+        <div className="week-col-times">
+          <label className="week-time-label" title="Départ">▶
+            <input type="time" className="week-time-input" value={getWorkStart(day.day)}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => updateDayTime(day.day, 'work_start', e.target.value)} />
+          </label>
+          <label className="week-time-label" title="Fin">◀
+            <input type="time" className="week-time-input" value={getWorkEnd(day.day)}
+              onClick={(e) => e.stopPropagation()}
+              onChange={(e) => updateDayTime(day.day, 'work_end', e.target.value)} />
+          </label>
+        </div>
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 5 }}>
+          <span className={`badge badge-xs ${doneCount === day.visits.length && day.visits.length > 0 ? 'badge-green' : 'badge-inactive'}`}>{doneCount}/{day.visits.length}</span>
+          {kmDay != null && <span className="badge badge-xs badge-blue">{kmDay} km</span>}
+          {travelMin != null && <span className="badge badge-xs" style={{ background: '#f3e8ff', color: '#7c3aed' }}>{travelMin} min</span>}
+        </div>
+        <div style={{ display: 'flex', gap: 4, marginTop: 5 }}>
+          {showOptimize && day.visits.length >= 2 && (
+            <button className="week-optimize-btn" onClick={() => handleOptimizeDay(day.day)}>⚡ Optimiser</button>
+          )}
+          {day.visits.length > 0 && (
+            <button className="week-col-launch" style={{ flex: 1 }}
+              onClick={() => launchFullRoute(day.visits, startLat, startLng, endLat, endLng)}>
+              🚀 Lancer
+            </button>
+          )}
+        </div>
+      </>
+    )
+  }
 
-          return (
-            <div
-              key={day.date}
-              className={`week-col${isDropActive ? ' week-col--drop-active' : ''}`}
-              onDragOver={(e) => handleDragOverColumn(e, day.day)}
-              onDrop={(e) => handleDrop(e, day.day)}
-            >
-              {/* En-tête colonne */}
-              <div className="week-col-header">
-                <div className="week-col-day-name">{dayLabel}</div>
-                <div className="week-col-date">{dateLabel}</div>
+  return (
+    <div className="week-drag-view" onDragEnd={reset}>
+      {renderSidebar()}
 
-                {/* Heure départ / fin */}
-                <div className="week-col-times">
-                  <label className="week-time-label" title="Heure de départ">
-                    ▶
-                    <input
-                      type="time"
-                      className="week-time-input"
-                      value={workStart}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => updateDayTime(day.day, 'work_start', e.target.value)}
-                    />
-                  </label>
-                  <label className="week-time-label" title="Heure de fin">
-                    ◀
-                    <input
-                      type="time"
-                      className="week-time-input"
-                      value={workEnd}
-                      onClick={(e) => e.stopPropagation()}
-                      onChange={(e) => updateDayTime(day.day, 'work_end', e.target.value)}
-                    />
-                  </label>
-                </div>
+      <div style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, overflow: 'hidden' }}>
+        {/* ── Toggle mode ── */}
+        <div className="week-mode-bar">
+          <button className={`week-mode-btn${viewMode === 'cards' ? ' active' : ''}`} onClick={() => setViewMode('cards')}>📋 Cartes</button>
+          <button className={`week-mode-btn${viewMode === 'timeline' ? ' active' : ''}`} onClick={() => setViewMode('timeline')}>⏱ Timeline</button>
+        </div>
 
-                {/* Badges stats */}
-                <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginTop: 5 }}>
-                  <span className={`badge badge-xs ${doneCount === day.visits.length && day.visits.length > 0 ? 'badge-green' : 'badge-inactive'}`}>
-                    {doneCount}/{day.visits.length}
-                  </span>
-                  {kmDay != null && <span className="badge badge-xs badge-blue">{kmDay} km</span>}
-                  {travelMin != null && <span className="badge badge-xs" style={{ background: '#f3e8ff', color: '#7c3aed' }}>{travelMin} min</span>}
-                </div>
-
-                {/* Bouton lancer la tournée */}
-                {day.visits.length > 0 && (
-                  <button
-                    className="week-col-launch"
-                    onClick={() => launchFullRoute(day.visits, startLat, startLng, endLat, endLng)}
-                  >
-                    🚀 Lancer la tournée
-                  </button>
-                )}
-              </div>
-
-              {/* Corps colonne — visites */}
-              <div className="week-col-body">
-                {isDropActive && dropTarget.insertIdx === 0 && <div className="week-drop-indicator" />}
-
-                {day.visits.map((v, i) => {
-                  const key    = `${v.patient_id}|${day.date}`
-                  const isDone = completions[key]?.done ?? v.done
-                  const isDrag = dragging?.type === 'visit' && dragging.sourceDay === day.day && dragging.sourceIdx === i
-                  const color  = getColor(v.patient_name)
-                  return (
-                    <div key={`${v.patient_id}-${i}`}>
-                      <div
-                        className={`week-visit-card${isDone ? ' week-visit-card--done' : ''}${isDrag ? ' week-visit-card--dragging' : ''}`}
-                        style={{ borderLeft: `3px solid ${color}` }}
-                        draggable
-                        onDragStart={(e) => handleDragStartVisit(e, day.day, i)}
-                        onDragOver={(e) => handleDragOverCard(e, day.day, i)}
-                      >
-                        {/* Ligne 1 : nom + actions */}
-                        <div style={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}>
-                          <div className="week-visit-name" style={{ flex: 1 }} title={v.patient_name}>{v.patient_name}</div>
-                          <input
-                            type="checkbox"
-                            checked={isDone}
-                            className="visit-check"
-                            style={{ width: 13, height: 13, flexShrink: 0, marginTop: 1 }}
-                            onChange={() => onCompletionToggle(v.patient_id, day.date, !isDone)}
-                            onClick={(e) => e.stopPropagation()}
-                          />
-                          <button className="week-visit-remove" onClick={() => removeVisit(day.day, i)} title="Retirer">✕</button>
-                        </div>
-                        {/* Ligne 2 : horaire + durée */}
-                        <div className="week-visit-time">{v.start_time} – {v.end_time} · {v.session_duration_min} min</div>
-                        {/* Ligne 3 : adresse + GPS */}
-                        {v.address && (
-                          <div className="week-visit-addr-row">
-                            <span className="week-visit-addr" title={v.address}>{v.address}</span>
-                            {v.lat && v.lng && (
-                              <span className="week-visit-gps">
-                                <button className="week-gps-btn" onClick={() => navigateTo(v.lat, v.lng)} title="Google Maps">🗺</button>
-                                <button className="week-gps-btn" onClick={() => navigateWaze(v.lat, v.lng)} title="Waze">🚗</button>
-                              </span>
+        {/* ════════════════════ MODE CARTES ════════════════════ */}
+        {viewMode === 'cards' && (
+          <div className="week-columns">
+            {days.map((day) => {
+              const isDropActive = dropTarget?.dayKey === day.day
+              return (
+                <div key={day.date}
+                  className={`week-col${isDropActive ? ' week-col--drop-active' : ''}`}
+                  onDragOver={(e) => handleDragOverColumn(e, day.day)}
+                  onDrop={(e) => handleDrop(e, day.day)}>
+                  <div className="week-col-header">{renderDayHeader(day)}</div>
+                  <div className="week-col-body">
+                    {isDropActive && dropTarget.insertIdx === 0 && <div className="week-drop-indicator" />}
+                    {day.visits.map((v, i) => {
+                      const key    = `${v.patient_id}|${day.date}`
+                      const isDone = completions[key]?.done ?? v.done
+                      const isDrag = dragging?.type === 'visit' && dragging.sourceDay === day.day && dragging.sourceIdx === i
+                      const color  = getColor(v.patient_name)
+                      return (
+                        <div key={`${v.patient_id}-${i}`}>
+                          <div className={`week-visit-card${isDone ? ' week-visit-card--done' : ''}${isDrag ? ' week-visit-card--dragging' : ''}`}
+                            style={{ borderLeft: `3px solid ${color}` }}
+                            draggable
+                            onDragStart={(e) => handleDragStartVisit(e, day.day, i)}
+                            onDragOver={(e) => handleDragOverCard(e, day.day, i)}>
+                            <div style={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}>
+                              <div className="week-visit-name" style={{ flex: 1 }} title={v.patient_name}>{v.patient_name}</div>
+                              <input type="checkbox" checked={isDone} className="visit-check"
+                                style={{ width: 13, height: 13, flexShrink: 0, marginTop: 1 }}
+                                onChange={() => onCompletionToggle(v.patient_id, day.date, !isDone)}
+                                onClick={(e) => e.stopPropagation()} />
+                              <button className="week-visit-remove" onClick={() => removeVisit(day.day, i)} title="Retirer">✕</button>
+                            </div>
+                            <div className="week-visit-time">{v.start_time} – {v.end_time} · {v.session_duration_min} min</div>
+                            {v.address && (
+                              <div className="week-visit-addr-row">
+                                <span className="week-visit-addr" title={v.address}>{v.address}</span>
+                                {v.lat && v.lng && (
+                                  <span className="week-visit-gps">
+                                    <button className="week-gps-btn" onClick={() => navigateTo(v.lat, v.lng)}>🗺</button>
+                                    <button className="week-gps-btn" onClick={() => navigateWaze(v.lat, v.lng)}>🚗</button>
+                                  </span>
+                                )}
+                              </div>
                             )}
                           </div>
-                        )}
-                      </div>
-                      {isDropActive && dropTarget.insertIdx === i + 1 && <div className="week-drop-indicator" />}
-                    </div>
-                  )
-                })}
+                          {isDropActive && dropTarget.insertIdx === i + 1 && <div className="week-drop-indicator" />}
+                        </div>
+                      )
+                    })}
+                    {day.visits.length === 0 && (
+                      <div className="week-col-empty">{isDropActive ? 'Déposer ici' : 'Glissez un patient'}</div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        )}
 
-                {day.visits.length === 0 && (
-                  <div className="week-col-empty">{isDropActive ? 'Déposer ici' : 'Glissez un patient'}</div>
-                )}
-              </div>
+        {/* ════════════════════ MODE TIMELINE ════════════════════ */}
+        {viewMode === 'timeline' && (
+          <div className="week-tl-wrap">
+            {/* En-têtes des jours (sticky) */}
+            <div className="week-tl-header">
+              <div className="week-tl-corner" />
+              {days.map((day) => (
+                <div key={day.date} className="week-tl-col-header">
+                  {renderDayHeader(day)}
+                </div>
+              ))}
             </div>
-          )
-        })}
+
+            {/* Corps scrollable */}
+            <div className="week-tl-scroll" ref={tlScrollRef}>
+              {/* Axe horaire */}
+              <div className="week-tl-axis" style={{ height: TL_H }}>
+                {Array.from({ length: (TL_END - TL_START) / 60 + 1 }, (_, i) => TL_START + i * 60).map((m) => (
+                  <div key={m} className="week-tl-hour-label" style={{ top: minToTopPx(m) }}>{fmtMin(m)}</div>
+                ))}
+              </div>
+
+              {/* Colonnes jours */}
+              {days.map((day) => {
+                const isTlDrop = dropTime?.dayKey === day.day
+                return (
+                  <div key={day.date}
+                    className={`week-tl-col${isTlDrop ? ' week-tl-col--drop' : ''}`}
+                    style={{ height: TL_H }}
+                    onDragOver={(e) => handleDragOverTimeline(e, day.day)}
+                    onDrop={(e) => handleDropTimeline(e, day.day)}>
+
+                    {/* Grille toutes les 30 min */}
+                    {Array.from({ length: (TL_END - TL_START) / 30 }, (_, i) => TL_START + i * 30).map((m) => (
+                      <div key={m}
+                        className={`week-tl-grid-line${m % 60 === 0 ? '' : ' week-tl-grid-line--half'}`}
+                        style={{ top: minToTopPx(m) }} />
+                    ))}
+
+                    {/* Plage de travail (fond légèrement coloré) */}
+                    {(() => {
+                      const ws = parseMin(getWorkStart(day.day))
+                      const we = parseMin(getWorkEnd(day.day))
+                      return (
+                        <div className="week-tl-work-zone" style={{
+                          top: minToTopPx(Math.max(ws, TL_START)),
+                          height: minToTopPx(Math.min(we, TL_END)) - minToTopPx(Math.max(ws, TL_START)),
+                        }} />
+                      )
+                    })()}
+
+                    {/* Blocs visites */}
+                    {day.visits.map((v, i) => {
+                      const key    = `${v.patient_id}|${day.date}`
+                      const isDone = completions[key]?.done ?? v.done
+                      const isDrag = dragging?.type === 'visit' && dragging.sourceDay === day.day && dragging.sourceIdx === i
+                      const color  = getColor(v.patient_name)
+                      const top    = minToTopPx(parseMin(v.start_time))
+                      const h      = durToHPx(v.session_duration_min ?? 30)
+                      return (
+                        <div key={`${v.patient_id}-${i}`}
+                          className={`week-tl-block${isDone ? ' week-tl-block--done' : ''}${isDrag ? ' week-tl-block--dragging' : ''}`}
+                          style={{ top, height: h, background: color + '22', borderLeft: `3px solid ${color}`, borderTop: `1px solid ${color}55` }}
+                          draggable
+                          onDragStart={(e) => handleDragStartVisit(e, day.day, i)}>
+                          <div style={{ display: 'flex', gap: 3, alignItems: 'flex-start' }}>
+                            <div style={{ flex: 1, minWidth: 0 }}>
+                              <div className="week-visit-name">{v.patient_name}</div>
+                              <div className="week-visit-time">{v.start_time} – {v.end_time}</div>
+                            </div>
+                            <input type="checkbox" checked={isDone} className="visit-check"
+                              style={{ width: 12, height: 12, marginTop: 1 }}
+                              onChange={() => onCompletionToggle(v.patient_id, day.date, !isDone)}
+                              onClick={(e) => e.stopPropagation()} />
+                          </div>
+                          {h >= 44 && v.address && <div className="week-visit-addr" style={{ marginTop: 2 }}>{v.address}</div>}
+                          {h >= 58 && v.lat && v.lng && (
+                            <div className="week-visit-gps" style={{ marginTop: 3 }}>
+                              <button className="week-gps-btn" onClick={() => navigateTo(v.lat, v.lng)}>🗺</button>
+                              <button className="week-gps-btn" onClick={() => navigateWaze(v.lat, v.lng)}>🚗</button>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+
+                    {/* Indicateur de dépôt */}
+                    {isTlDrop && (
+                      <>
+                        <div className="week-tl-drop-line" style={{ top: minToTopPx(dropTime.min) }} />
+                        <div className="week-tl-drop-label" style={{ top: minToTopPx(dropTime.min) }}>{fmtMin(dropTime.min)}</div>
+                      </>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

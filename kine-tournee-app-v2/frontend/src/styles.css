@@ -1146,4 +1146,172 @@ pre { overflow: auto; background: #0f172a; color: #e5eef7; padding: 12px; border
   .week-sidebar { width: 160px; min-width: 160px; }
   .week-col { min-width: 120px; }
   .week-drag-view { min-height: 400px; }
+  .week-tl-col { min-width: 120px; }
+  .week-tl-col-header { min-width: 120px; }
+}
+
+/* ── Mode toggle cartes / timeline ───────────────────────────────────────── */
+.week-mode-bar {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface2);
+}
+.week-mode-btn {
+  flex: 1;
+  padding: 7px 10px;
+  background: none;
+  border: none;
+  border-right: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--muted);
+  transition: background .15s, color .15s;
+}
+.week-mode-btn:last-child { border-right: none; }
+.week-mode-btn.active { background: var(--green); color: #fff; }
+.week-mode-btn:not(.active):hover { background: var(--surface); color: var(--text); }
+
+/* ── Bouton Optimiser ────────────────────────────────────────────────────── */
+.week-optimize-btn {
+  flex: 1;
+  padding: 5px 6px;
+  background: var(--indigo-light);
+  color: var(--indigo);
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+  white-space: nowrap;
+}
+.week-optimize-btn:hover { background: var(--indigo); color: #fff; }
+
+/* ── Timeline (Apple Calendar style) ────────────────────────────────────── */
+.week-tl-wrap {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.week-tl-header {
+  display: flex;
+  border-bottom: 2px solid var(--border);
+  flex-shrink: 0;
+  background: var(--surface);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.week-tl-header::-webkit-scrollbar { display: none; }
+
+.week-tl-corner {
+  width: 52px;
+  min-width: 52px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border);
+}
+
+.week-tl-col-header {
+  flex: 1;
+  min-width: 150px;
+  padding: 10px 10px 8px;
+  border-right: 1px solid var(--border);
+}
+.week-tl-col-header:last-child { border-right: none; }
+
+.week-tl-scroll {
+  display: flex;
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: auto;
+  background: var(--surface);
+}
+
+.week-tl-axis {
+  width: 52px;
+  min-width: 52px;
+  flex-shrink: 0;
+  position: relative;
+  border-right: 1px solid var(--border);
+  background: var(--surface2);
+}
+.week-tl-hour-label {
+  position: absolute;
+  left: 0; right: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--muted);
+  text-align: right;
+  transform: translateY(-50%);
+  pointer-events: none;
+  user-select: none;
+}
+
+.week-tl-col {
+  flex: 1;
+  min-width: 150px;
+  position: relative;
+  border-right: 1px solid var(--border);
+  transition: background .12s;
+}
+.week-tl-col:last-child { border-right: none; }
+.week-tl-col--drop { background: var(--green-xlight); }
+
+.week-tl-grid-line {
+  position: absolute;
+  left: 0; right: 0;
+  height: 1px;
+  background: var(--border);
+  pointer-events: none;
+}
+.week-tl-grid-line--half { opacity: .4; }
+
+.week-tl-work-zone {
+  position: absolute;
+  left: 0; right: 0;
+  background: var(--green-xlight);
+  pointer-events: none;
+  opacity: .6;
+}
+
+.week-tl-block {
+  position: absolute;
+  left: 4px; right: 4px;
+  border-radius: 7px;
+  padding: 4px 7px;
+  cursor: grab;
+  overflow: hidden;
+  transition: box-shadow .1s, opacity .1s;
+  box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  z-index: 2;
+}
+.week-tl-block:hover { box-shadow: var(--shadow-md); z-index: 5; }
+.week-tl-block--done { opacity: .42; }
+.week-tl-block--dragging { opacity: .18; cursor: grabbing; }
+
+.week-tl-drop-line {
+  position: absolute;
+  left: 0; right: 0;
+  height: 2px;
+  background: var(--green);
+  pointer-events: none;
+  z-index: 10;
+}
+.week-tl-drop-label {
+  position: absolute;
+  left: 5px;
+  transform: translateY(-100%);
+  background: var(--green);
+  color: #fff;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  pointer-events: none;
+  z-index: 10;
+  white-space: nowrap;
 }
