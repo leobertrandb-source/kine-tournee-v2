@@ -837,6 +837,7 @@ pre { overflow: auto; background: #0f172a; color: #e5eef7; padding: 12px; border
   font-weight: 700; text-decoration: none; border: none; cursor: pointer;
   white-space: nowrap;
 }
+.notif-btn--sms  { background: #34c759; color: #fff; }
 .notif-btn--wa   { background: #25d366; color: #fff; }
 .notif-btn--mail { background: #4285f4; color: #fff; }
 .notif-btn--copy { background: var(--surface2); color: var(--text2); border: 1px solid var(--border); }

@@ -1,13 +1,24 @@
 import { useEffect, useState } from 'react'
 import { useToast } from './Toast'
 
-// Formate un numéro français en format international pour WhatsApp
-function toWhatsAppNumber(phone) {
+function toIntlNumber(phone) {
   if (!phone) return null
   const digits = phone.replace(/\D/g, '')
   if (digits.startsWith('33')) return digits
   if (digits.startsWith('0') && digits.length === 10) return '33' + digits.slice(1)
   return digits.length >= 9 ? digits : null
+}
+
+function toSmsUrl(phone, message) {
+  const num = toIntlNumber(phone)
+  if (!num) return null
+  return `sms:+${num}?body=${encodeURIComponent(message)}`
+}
+
+function toWhatsAppUrl(phone, message) {
+  const num = toIntlNumber(phone)
+  if (!num) return null
+  return `https://wa.me/${num}?text=${encodeURIComponent(message)}`
 }
 
 const MSG_TYPES = [
@@ -61,8 +72,8 @@ function PatientNotifRow({ patient, visits, therapistName, weekLabel, msgType })
     setMessage(buildMessage(firstName, visits, weekLabel, therapistName, msgType))
   }, [msgType]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const waNumber = toWhatsAppNumber(patient.phone)
-  const waUrl = waNumber ? `https://wa.me/${waNumber}?text=${encodeURIComponent(message)}` : null
+  const smsUrl = toSmsUrl(patient.phone, message)
+  const waUrl = toWhatsAppUrl(patient.phone, message)
   const mailUrl = patient.email
     ? `mailto:${patient.email}?subject=${encodeURIComponent(`Séances kinésithérapie – semaine du ${weekLabel}`)}&body=${encodeURIComponent(message)}`
     : null
@@ -90,13 +101,17 @@ function PatientNotifRow({ patient, visits, therapistName, weekLabel, msgType })
           </div>
         </div>
         <div className="notif-row-btns">
+          {smsUrl
+            ? <a className="notif-btn notif-btn--sms" href={smsUrl}>📱 SMS</a>
+            : <span className="small muted" title="Numéro manquant">📱</span>
+          }
           {waUrl
-            ? <a className="notif-btn notif-btn--wa" href={waUrl} target="_blank" rel="noopener noreferrer">💬 WhatsApp</a>
-            : <span className="small muted" title="Numéro manquant">💬</span>
+            ? <a className="notif-btn notif-btn--wa" href={waUrl} target="_blank" rel="noopener noreferrer">💬 WA</a>
+            : null
           }
           {mailUrl
             ? <a className="notif-btn notif-btn--mail" href={mailUrl}>✉ Email</a>
-            : <span className="small muted" title="Email manquant">✉</span>
+            : null
           }
           <button className="notif-btn notif-btn--copy" onClick={(e) => { e.stopPropagation(); copy() }}>📋 Copier</button>
           <span className="notif-chevron">{open ? '▲' : '▼'}</span>
@@ -179,7 +194,7 @@ export default function NotifyModal({ schedule, patients, therapist, onClose }) 
         </div>
 
         <div className="small muted" style={{ padding: '8px 16px', background: 'var(--surface2)', borderBottom: '1px solid var(--border)' }}>
-          Cliquez sur <strong>WhatsApp</strong> pour ouvrir le message pré-rempli, <strong>Email</strong> pour ouvrir votre messagerie, ou <strong>Copier</strong> pour un SMS manuel.
+          <strong>SMS</strong> ouvre votre messagerie avec le message pré-rempli. <strong>Copier</strong> pour coller manuellement.
         </div>
 
         <div className="notif-list">
