@@ -12,7 +12,8 @@ function toIntlNumber(phone) {
 function toSmsUrl(phone, message) {
   const num = toIntlNumber(phone)
   if (!num) return null
-  return `sms:+${num}?body=${encodeURIComponent(message)}`
+  // iOS uses & separator, Android uses ? — & works on both
+  return `sms:+${num}&body=${encodeURIComponent(message)}`
 }
 
 function toWhatsAppUrl(phone, message) {
@@ -102,15 +103,15 @@ function PatientNotifRow({ patient, visits, therapistName, weekLabel, msgType })
         </div>
         <div className="notif-row-btns">
           {smsUrl
-            ? <a className="notif-btn notif-btn--sms" href={smsUrl}>📱 SMS</a>
+            ? <a className="notif-btn notif-btn--sms" href={smsUrl} onClick={(e) => e.stopPropagation()}>📱 SMS</a>
             : <span className="small muted" title="Numéro manquant">📱</span>
           }
           {waUrl
-            ? <a className="notif-btn notif-btn--wa" href={waUrl} target="_blank" rel="noopener noreferrer">💬 WA</a>
+            ? <a className="notif-btn notif-btn--wa" href={waUrl} target="_blank" rel="noopener noreferrer" onClick={(e) => e.stopPropagation()}>💬 WA</a>
             : null
           }
           {mailUrl
-            ? <a className="notif-btn notif-btn--mail" href={mailUrl}>✉ Email</a>
+            ? <a className="notif-btn notif-btn--mail" href={mailUrl} onClick={(e) => e.stopPropagation()}>✉ Email</a>
             : null
           }
           <button className="notif-btn notif-btn--copy" onClick={(e) => { e.stopPropagation(); copy() }}>📋 Copier</button>
